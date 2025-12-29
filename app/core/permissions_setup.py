@@ -49,5 +49,5 @@ async def generate_permissions(db: AsyncSession):
             result = await db.execute(select(Permission).where(Permission.code == code))
             perm = result.scalar_one_or_none()
             if not perm:
-                db.add(Permission(code=code, description=f"Permission to {action} {model_name}"))
+                db.add(Permission(code=code))
     await db.commit()

@@ -10,7 +10,7 @@ class ProductBase(BaseModel):
     price: Decimal
     is_active: bool = True
     category_id: int
-    business_id: int
+    business_id: Optional[int] = None
     external_id: Optional[str] = None
     provider: Optional[EcommerceProvider] = None
     metadata_json: Dict[str, Any] = {}

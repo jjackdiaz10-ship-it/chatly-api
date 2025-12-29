@@ -2,7 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 class BusinessChannelBase(BaseModel):
-    business_id: int
+    business_id: Optional[int] = None
     channel_id: int
     account_id: Optional[str] = None
     token: Optional[str] = None

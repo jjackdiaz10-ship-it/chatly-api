@@ -13,12 +13,13 @@ from sqlalchemy import select
 import logging
 import re
 
+from fastapi.responses import PlainTextResponse
+import os
+
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 @router.get("/{channel_name}/{business_channel_id}")
 async def verify_webhook_by_id(channel_name: str, business_channel_id: int, request: Request, db: AsyncSession = Depends(get_db)):
-    # Verify the channel exists and matches token
-    # We could also validate channel_name against channel.channel.name for extra security
     res = await db.execute(select(BusinessChannel).where(BusinessChannel.id == business_channel_id))
     channel = res.scalars().first()
     
@@ -26,13 +27,17 @@ async def verify_webhook_by_id(channel_name: str, business_channel_id: int, requ
         raise HTTPException(status_code=404, detail="Channel not found")
         
     params = request.query_params
-    # We expect verify_token to be stored in metadata_json or config, 
-    # for now assuming a consistent one or strictly checking standard meta flow
-    verify_token = channel.metadata_json.get("verify_token", "YOUR_VERIFY_TOKEN")
+    
+    # 1. Try to get token from channel metadata
+    # 2. Fallback to ENV variable
+    # 3. Default fallback
+    verify_token = channel.metadata_json.get("verify_token") or os.getenv("WEBHOOK_VERIFY_TOKEN", "chatly_verify_token")
     
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == verify_token:
-        return int(params.get("hub.challenge"))
-    raise HTTPException(status_code=403)
+        challenge = params.get("hub.challenge")
+        return PlainTextResponse(content=challenge)
+        
+    raise HTTPException(status_code=403, detail="Verification token mismatch")
 
 @router.post("/{channel_name}/{business_channel_id}")
 async def handle_webhook_by_id(channel_name: str, business_channel_id: int, request: Request, db: AsyncSession = Depends(get_db)):

@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 class CategoryCreate(BaseModel):
     name: str
-    business_id: int
+    business_id: int | None = None
     description: str | None = None
     is_active: bool = True
 
