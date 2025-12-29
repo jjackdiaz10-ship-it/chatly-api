@@ -11,6 +11,7 @@ class Cart(Base):
     business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False)
     user_phone = Column(String, nullable=False) # Key to correlate with WhatsApp user
     is_active = Column(Boolean, default=True)
+    metadata_json = Column(String, default="{}") # To track AI states like last_suggestion
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
