@@ -1,0 +1,104 @@
+# app/api/v1/webhooks.py
+from fastapi import APIRouter, Request, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.session import get_db
+from app.models.bot import Bot
+from app.services.ai_service import AIService
+from app.services.meta_service import MetaService
+from app.services.payment_service import PaymentService
+from app.models.payment_config import PaymentConfig
+from app.models.business_channel import BusinessChannel
+from app.models.bot_channel import BotChannel
+from sqlalchemy import select
+import logging
+import re
+
+router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+@router.get("/{channel_name}/{business_channel_id}")
+async def verify_webhook_by_id(channel_name: str, business_channel_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    # Verify the channel exists and matches token
+    # We could also validate channel_name against channel.channel.name for extra security
+    res = await db.execute(select(BusinessChannel).where(BusinessChannel.id == business_channel_id))
+    channel = res.scalars().first()
+    
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+        
+    params = request.query_params
+    # We expect verify_token to be stored in metadata_json or config, 
+    # for now assuming a consistent one or strictly checking standard meta flow
+    verify_token = channel.metadata_json.get("verify_token", "YOUR_VERIFY_TOKEN")
+    
+    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == verify_token:
+        return int(params.get("hub.challenge"))
+    raise HTTPException(status_code=403)
+
+@router.post("/{channel_name}/{business_channel_id}")
+async def handle_webhook_by_id(channel_name: str, business_channel_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    # Here we would verify X-Hub-Signature against channel.token (if it's the app secret)
+    # For now implementation focuses on routing logic
+    res = await db.execute(select(BusinessChannel).where(BusinessChannel.id == business_channel_id))
+    channel = res.scalars().first()
+    
+    if not channel or not channel.active:
+        raise HTTPException(status_code=404, detail="Channel not active")
+
+    data = await request.json()
+    try:
+        if "object" in data and data["object"] == "whatsapp_business_account":
+            for entry in data["entry"]:
+                for change in entry["changes"]:
+                    value = change["value"]
+                    if "messages" in value:
+                        for msg in value["messages"]:
+                            from_num = msg["from"]
+                            text = msg["text"]["body"]
+                            phone_id = value["metadata"]["phone_number_id"]
+                            
+                            # Find Bot assigned to this channel
+                            # Assuming 1 Bot per Channel for simplicity, or complex routing logic
+                            bot_res = await db.execute(
+                                select(Bot)
+                                .join(BotChannel)
+                                .where(BotChannel.business_channel_id == business_channel_id)
+                            )
+                            bot = bot_res.scalars().first()
+                            
+                            if bot and bot.is_active:
+                                response_text = None
+                                
+                                # 1. Hybrid Rule Engine
+                                if bot.hybrid_mode and bot.rule_set:
+                                    from app.services.rule_engine import RuleEngine
+                                    response_text = RuleEngine.match(text, bot.rule_set)
+                                
+                                # 2. AI Fallback
+                                if not response_text and "gemini_api_key" in bot.config:
+                                    ai = AIService(bot.config["gemini_api_key"])
+                                    response_text = await ai.chat(db, bot.business_id, text)
+                                    
+                                    # 3. Payment Links
+                                    if "[PAYLINK:" in response_text:
+                                        pc_res = await db.execute(
+                                            select(PaymentConfig).where(PaymentConfig.business_id == bot.business_id, PaymentConfig.active == True)
+                                        )
+                                        p_config = pc_res.scalars().first()
+                                        if p_config:
+                                            matches = re.findall(r"\[PAYLINK:(\d+)\]", response_text)
+                                            for pid in matches:
+                                                link = PaymentService.generate_payment_link(
+                                                    p_config.provider, p_config.credentials, int(pid), 0.0
+                                                )
+                                                response_text = response_text.replace(f"[PAYLINK:{pid}]", link)
+                                
+                                # 4. Send
+                                if response_text:
+                                    # Use the token from the BusinessChannel
+                                    meta = MetaService(channel.token, phone_id)
+                                    await meta.send_whatsapp_message(from_num, response_text)
+                                    
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
