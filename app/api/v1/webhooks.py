@@ -86,12 +86,12 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                                     if response_text:
                                         logging.info(f"Rule match: {response_text}")
                                 
-                                # 2. AI Fallback
-                                if not response_text and "gemini_api_key" in bot.config:
-                                    logging.info("Using AI fallback...")
-                                    ai = AIService(bot.config["gemini_api_key"])
+                                # 2. Native AI Fallback
+                                if not response_text:
+                                    logging.info("Using Native Sales AI...")
+                                    ai = AIService()
                                     response_text = await ai.chat(db, bot.business_id, text)
-                                    logging.info(f"AI Response: {response_text}")
+                                    logging.info(f"Native AI Response: {response_text}")
                                     
                                     # 3. Payment Links
                                     if response_text and "[PAYLINK:" in response_text:
