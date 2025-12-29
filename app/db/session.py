@@ -19,6 +19,12 @@ DATABASE_URL = os.getenv(
     "postgresql://chatly:rETMFt1WvJRakzLoUeRQ83P6dhbINHKo@dpg-d58u39qli9vc73a9micg-a.oregon-postgres.render.com/chatly_rg15"
 )
 
+# Ensure usage of asyncpg driver
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 engine = create_async_engine(
     DATABASE_URL,
     echo=True

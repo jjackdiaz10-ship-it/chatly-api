@@ -8,10 +8,10 @@ router = generate_crud(
     schema_update=RoleUpdate,
     prefix="/roles",
     tag="Roles",
-    permissions={
-        "create": "roles:create",
-        "read": "roles:view",
-        "update": "roles:update",
-        "delete": "roles:delete"
-    }
+    # permissions={
+    #     "create": "roles:create",
+    #     "read": "roles:view",
+    #     "update": "roles:update",
+    #     "delete": "roles:delete"
+    # }
 )
