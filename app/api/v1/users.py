@@ -21,7 +21,7 @@ router = APIRouter(
     "/",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("users:create"))]
+    #dependencies=[Depends(require_permission("users:create"))]
 )
 async def create_user(
     data: UserCreate,
