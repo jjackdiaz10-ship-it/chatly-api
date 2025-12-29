@@ -16,12 +16,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.db.session import DATABASE_URL
+
 config = context.config
 
-# Overwrite sqlalchemy.url with the environment variable if present
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Force sync driver for Alembic
+sync_url = DATABASE_URL.replace("postgresql+asyncpg", "postgresql")
+config.set_main_option("sqlalchemy.url", sync_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

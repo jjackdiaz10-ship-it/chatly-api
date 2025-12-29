@@ -6,7 +6,18 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import declarative_base
 from typing import AsyncGenerator
 
-DATABASE_URL = "postgresql+asyncpg://postgres:jorge12345@localhost:5432/chatly"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Use the environment variable if available (e.g., on Render), otherwise fall back to local dev DB
+# Note: Render provides an internal URL (dpg-...) which is only accessible from within Render.
+# For local development, use your local Postgres or the 'External Database URL' from Render.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://postgres:jorge12345@localhost:5432/chatly"
+)
 
 engine = create_async_engine(
     DATABASE_URL,
