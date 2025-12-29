@@ -46,7 +46,8 @@ async def get_current_user(
         select(User)
         .options(
             selectinload(User.role)
-            .selectinload(Role.permissions)
+            .selectinload(Role.permissions),
+            selectinload(User.memberships)
         )
         .where(User.id == user_id)
     )
