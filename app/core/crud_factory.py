@@ -13,13 +13,22 @@ def generate_crud(
     schema_update,
     prefix: str,
     tag: str,
-    permissions: dict  # Cambiado a dict
+    permissions: dict = None
 ) -> APIRouter:
 
     router = APIRouter(prefix=prefix, tags=[tag])
+    
+    if permissions is None:
+        permissions = {}
+
+    def get_deps(action: str):
+        perm_code = permissions.get(action)
+        if perm_code:
+            return [Depends(require_permission(perm_code))]
+        return []
 
     # Crear
-    @router.post("/", dependencies=[Depends(require_permission(permissions["create"]))])
+    @router.post("/", dependencies=get_deps("create"))
     async def create(
         data: schema_create, 
         user = Depends(get_current_user),
@@ -59,7 +68,7 @@ def generate_crud(
         return obj
 
     # Listar / Leer
-    @router.get("/", dependencies=[Depends(require_permission(permissions["read"]))])
+    @router.get("/", dependencies=get_deps("read"))
     async def list(
         user = Depends(get_current_user),
         db: AsyncSession = Depends(get_db)
@@ -84,7 +93,7 @@ def generate_crud(
         return result.scalars().all()
 
     # Actualizar
-    @router.put("/{id}", dependencies=[Depends(require_permission(permissions["update"]))])
+    @router.put("/{id}", dependencies=get_deps("update"))
     async def update(
         id: int, 
         data: schema_update, 
@@ -112,7 +121,7 @@ def generate_crud(
         return obj
 
     # Eliminar
-    @router.delete("/{id}", dependencies=[Depends(require_permission(permissions["delete"]))])
+    @router.delete("/{id}", dependencies=get_deps("delete"))
     async def delete(
         id: int, 
         user = Depends(get_current_user),
