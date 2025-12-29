@@ -16,7 +16,7 @@ load_dotenv()
 # For local development, use your local Postgres or the 'External Database URL' from Render.
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:jorge12345@localhost:5432/chatly"
+    "postgresql://chatly:rETMFt1WvJRakzLoUeRQ83P6dhbINHKo@dpg-d58u39qli9vc73a9micg-a.oregon-postgres.render.com/chatly_rg15"
 )
 
 engine = create_async_engine(
