@@ -61,12 +61,20 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                         for msg in value["messages"]:
                             from_num = msg["from"]
                             text = msg.get("text", {}).get("body")
+                            # Handle interactive responses (button/list clicks)
+                            if "interactive" in msg:
+                                i_type = msg["interactive"]["type"]
+                                if i_type == "button_reply":
+                                    text = msg["interactive"]["button_reply"]["title"]
+                                elif i_type == "list_reply":
+                                    text = msg["interactive"]["list_reply"]["title"]
+                                    # Could also use ID if needed: msg["interactive"]["list_reply"]["id"]
+                                    
                             print(f"DEBUG: Received message from {from_num}: {text}")
                             if not text:
                                 continue
                                 
                             phone_id = value["metadata"]["phone_number_id"]
-                            logging.info(f"Message from {from_num}: {text}")
                             
                             # Find Bot assigned to this channel
                             bot_res = await db.execute(
@@ -77,46 +85,27 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                             bot = bot_res.scalars().first()
                             
                             if bot and bot.is_active:
-                                response_text = None
+                                response_content = None
+                                msg_type = "text"
                                 print(f"DEBUG: Found active bot: {bot.name}")
                                 
-                                # 1. Hybrid Rule Engine
-                                if bot.hybrid_mode and bot.rule_set:
-                                    from app.services.rule_engine import RuleEngine
-                                    response_text = RuleEngine.match(text, bot.rule_set)
-                                    if response_text:
-                                        logging.info(f"Rule match: {response_text}")
+                                # 1. Native Mastermind AI
+                                print("DEBUG: Using Mastermind Native Sales AI...")
+                                ai = AIService(bot)
+                                response_content, msg_type = await ai.chat(db, bot.business_id, from_num, text)
+                                print(f"DEBUG: AI Response ({msg_type}): {response_content}")
                                 
-                                # 2. Native AI Fallback
-                                if not response_text:
-                                    logging.info("Using Native Sales AI...")
-                                    ai = AIService()
-                                    response_text = await ai.chat(db, bot.business_id, text)
-                                    logging.info(f"Native AI Response: {response_text}")
-                                    
-                                    # 3. Payment Links
-                                    if response_text and "[PAYLINK:" in response_text:
-                                        pc_res = await db.execute(
-                                            select(PaymentConfig).where(PaymentConfig.business_id == bot.business_id, PaymentConfig.active == True)
-                                        )
-                                        p_config = pc_res.scalars().first()
-                                        if p_config:
-                                            matches = re.findall(r"\[PAYLINK:(\d+)\]", response_text)
-                                            for pid in matches:
-                                                link = PaymentService.generate_payment_link(
-                                                    p_config.provider, p_config.credentials, int(pid), 0.0
-                                                )
-                                                response_text = response_text.replace(f"[PAYLINK:{pid}]", link)
-                                
-                                # 4. Send
-                                if response_text:
-                                    print(f"DEBUG: Attempting to send message to {from_num}: {response_text}")
+                                # 2. Send
+                                if response_content:
+                                    print(f"DEBUG: Attempting to send message to {from_num}")
                                     try:
                                         meta = MetaService(channel.token, phone_id)
-                                        send_res = await meta.send_whatsapp_message(from_num, response_text)
+                                        send_res = await meta.send_whatsapp_message(from_num, response_content, msg_type)
                                         print(f"DEBUG: Meta send response: {send_res}")
                                     except Exception as e:
                                         print(f"DEBUG: Exception during Meta send: {str(e)}")
+                                else:
+                                    print("DEBUG: No response content generated")
                                 else:
                                     logging.warning("No response text generated")
                             else:

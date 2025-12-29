@@ -15,12 +15,14 @@ class Product(Base):
     name = Column(String, nullable=False)
     description = Column(String)
     price = Column(Numeric(10, 2), nullable=False)
+    stock = Column(Integer, default=0)
+    sku = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     
     # Provider-specific fields
     external_id = Column(String, nullable=True, index=True)
     provider = Column(SqlEnum(EcommerceProvider), nullable=True)
-    metadata_json = Column(JSON, nullable=True, default={}) # Renamed to avoid reserved words/conflicts
+    metadata_json = Column(JSON, nullable=True, default={})
 
     category = relationship("Category", back_populates="products")
     business = relationship("Business", back_populates="products")

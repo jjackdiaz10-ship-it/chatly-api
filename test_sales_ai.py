@@ -25,8 +25,12 @@ async def test_ai():
         print("\n--- TEST NATIVE SALES AI ---\n")
         for msg in test_messages:
             print(f"Cliente: {msg}")
-            response = await ai.chat(db, business_id, msg)
-            print(f"IA: {response}\n")
+            content, msg_type = await ai.chat(db, business_id, "56930973562", msg)
+            if msg_type == "interactive":
+                import json
+                print(f"IA (Interactive): {json.dumps(content, indent=2)}\n")
+            else:
+                print(f"IA: {content}\n")
 
 if __name__ == "__main__":
     asyncio.run(test_ai())

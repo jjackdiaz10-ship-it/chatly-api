@@ -8,6 +8,8 @@ class ProductBase(BaseModel):
     name: str
     description: Optional[str] = None
     price: Decimal
+    stock: int = 0
+    sku: Optional[str] = None
     is_active: bool = True
     category_id: int
     business_id: Optional[int] = None

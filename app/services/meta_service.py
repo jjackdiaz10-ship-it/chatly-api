@@ -8,7 +8,7 @@ class MetaService:
         self.phone_number_id = phone_number_id
         self.base_url = "https://graph.facebook.com/v18.0"
 
-    async def send_whatsapp_message(self, to: str, text: str):
+    async def send_whatsapp_message(self, to: str, content: Any, msg_type: str = "text"):
         if not self.phone_number_id:
             raise ValueError("phone_number_id is required for WhatsApp")
             
@@ -17,12 +17,22 @@ class MetaService:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "text",
-            "text": {"body": text}
-        }
+        
+        if msg_type == "text":
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "text",
+                "text": {"body": content}
+            }
+        else:
+            # content is expected to be the full interactive dictionary
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "interactive",
+                "interactive": content
+            }
         
         async with httpx.AsyncClient() as client:
             print(f"DEBUG: Meta API Request -> URL: {url}")
