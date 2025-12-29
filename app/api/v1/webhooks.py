@@ -50,6 +50,8 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
         raise HTTPException(status_code=404, detail="Channel not active")
 
     data = await request.json()
+    logging.info(f"Webhook received: {data}")
+    
     try:
         if "object" in data and data["object"] == "whatsapp_business_account":
             for entry in data["entry"]:
@@ -58,11 +60,14 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                     if "messages" in value:
                         for msg in value["messages"]:
                             from_num = msg["from"]
-                            text = msg["text"]["body"]
+                            text = msg.get("text", {}).get("body")
+                            if not text:
+                                continue
+                                
                             phone_id = value["metadata"]["phone_number_id"]
+                            logging.info(f"Message from {from_num}: {text}")
                             
                             # Find Bot assigned to this channel
-                            # Assuming 1 Bot per Channel for simplicity, or complex routing logic
                             bot_res = await db.execute(
                                 select(Bot)
                                 .join(BotChannel)
@@ -72,19 +77,24 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                             
                             if bot and bot.is_active:
                                 response_text = None
+                                logging.info(f"Found active bot: {bot.name}")
                                 
                                 # 1. Hybrid Rule Engine
                                 if bot.hybrid_mode and bot.rule_set:
                                     from app.services.rule_engine import RuleEngine
                                     response_text = RuleEngine.match(text, bot.rule_set)
+                                    if response_text:
+                                        logging.info(f"Rule match: {response_text}")
                                 
                                 # 2. AI Fallback
                                 if not response_text and "gemini_api_key" in bot.config:
+                                    logging.info("Using AI fallback...")
                                     ai = AIService(bot.config["gemini_api_key"])
                                     response_text = await ai.chat(db, bot.business_id, text)
+                                    logging.info(f"AI Response: {response_text}")
                                     
                                     # 3. Payment Links
-                                    if "[PAYLINK:" in response_text:
+                                    if response_text and "[PAYLINK:" in response_text:
                                         pc_res = await db.execute(
                                             select(PaymentConfig).where(PaymentConfig.business_id == bot.business_id, PaymentConfig.active == True)
                                         )
@@ -99,11 +109,16 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                                 
                                 # 4. Send
                                 if response_text:
-                                    # Use the token from the BusinessChannel
+                                    logging.info(f"Sending message to {from_num}")
                                     meta = MetaService(channel.token, phone_id)
-                                    await meta.send_whatsapp_message(from_num, response_text)
-                                    
+                                    send_res = await meta.send_whatsapp_message(from_num, response_text)
+                                    logging.info(f"Meta send response: {send_res}")
+                                else:
+                                    logging.warning("No response text generated")
+                            else:
+                                logging.warning(f"No active bot found for channel {business_channel_id}")
+                                
         return {"status": "ok"}
     except Exception as e:
-        logging.error(f"Error processing webhook: {e}")
+        logging.error(f"Error processing webhook: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
