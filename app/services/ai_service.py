@@ -16,6 +16,12 @@ class AIService:
     Mastermind Native Sales AI.
     Features: Context-aware, Rule-integrated, Cart-managing, Interactive Suggestion generator.
     """
+    def __init__(self, bot: Optional[Bot] = None):
+        self.bot = bot
+        self.config = bot.config if bot else {}
+        self.rules = bot.rule_set if bot else []
+        self.business_name = self.config.get("business_name", "nuestra tienda")
+
     async def get_context(self, db: AsyncSession, business_id: int) -> Dict[str, Any]:
         from app.models.category import Category
         # 1. Store Knowledge Base
