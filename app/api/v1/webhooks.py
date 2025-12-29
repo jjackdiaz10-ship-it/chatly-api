@@ -110,10 +110,13 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                                 
                                 # 4. Send
                                 if response_text:
-                                    print(f"DEBUG: Sending message to {from_num}: {response_text}")
-                                    meta = MetaService(channel.token, phone_id)
-                                    send_res = await meta.send_whatsapp_message(from_num, response_text)
-                                    print(f"DEBUG: Meta send response: {send_res}")
+                                    print(f"DEBUG: Attempting to send message to {from_num}: {response_text}")
+                                    try:
+                                        meta = MetaService(channel.token, phone_id)
+                                        send_res = await meta.send_whatsapp_message(from_num, response_text)
+                                        print(f"DEBUG: Meta send response: {send_res}")
+                                    except Exception as e:
+                                        print(f"DEBUG: Exception during Meta send: {str(e)}")
                                 else:
                                     logging.warning("No response text generated")
                             else:

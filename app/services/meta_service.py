@@ -25,11 +25,17 @@ class MetaService:
         }
         
         async with httpx.AsyncClient() as client:
-            import logging
-            logging.info(f"Sending Meta message to {to} via {url}")
-            response = await client.post(url, headers=headers, json=payload)
-            logging.info(f"Meta response status: {response.status_code}")
-            return response.json()
+            print(f"DEBUG: Meta API Request -> URL: {url}")
+            # print(f"DEBUG: Meta API Request -> Headers: {headers}") # Hide token for security
+            print(f"DEBUG: Meta API Request -> Payload: {payload}")
+            try:
+                response = await client.post(url, headers=headers, json=payload, timeout=10.0)
+                print(f"DEBUG: Meta API Response -> Status: {response.status_code}")
+                print(f"DEBUG: Meta API Response -> Body: {response.text}")
+                return response.json()
+            except Exception as e:
+                print(f"DEBUG: Meta API Error: {str(e)}")
+                return {"error": str(e)}
 
     async def send_instagram_message(self, recipient_id: str, text: str):
         # Placeholder for Instagram messaging (similar to FB Messenger API)
