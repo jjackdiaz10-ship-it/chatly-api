@@ -42,6 +42,12 @@ class AIService:
         # In a real scenario, we would inject the payment link generation capability 
         # or use function calling. For simplicity, we'll let the AI use the link placeholder
         # and we can post-process or just ensure it knows to use the placeholder.
-        
-        response = await self.model.generate_content_async(full_prompt)
-        return response.text
+        import logging
+        logging.info(f"Generating content for business {business_id}...")
+        try:
+            response = await self.model.generate_content_async(full_prompt)
+            logging.info(f"Gemini response successfully generated.")
+            return response.text
+        except Exception as e:
+            logging.error(f"Error in Gemini: {e}")
+            return "Lo siento, tuve un problema al procesar tu mensaje."

@@ -25,7 +25,10 @@ class MetaService:
         }
         
         async with httpx.AsyncClient() as client:
+            import logging
+            logging.info(f"Sending Meta message to {to} via {url}")
             response = await client.post(url, headers=headers, json=payload)
+            logging.info(f"Meta response status: {response.status_code}")
             return response.json()
 
     async def send_instagram_message(self, recipient_id: str, text: str):
