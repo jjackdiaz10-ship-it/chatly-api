@@ -1,6 +1,6 @@
 # app/services/meta_service.py
 import httpx
-from typing import Optional
+from typing import Optional, Any
 
 class MetaService:
     def __init__(self, access_token: str, phone_number_id: Optional[str] = None):

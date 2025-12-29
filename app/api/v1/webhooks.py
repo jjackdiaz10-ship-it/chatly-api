@@ -106,8 +106,6 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                                         print(f"DEBUG: Exception during Meta send: {str(e)}")
                                 else:
                                     print("DEBUG: No response content generated")
-                                else:
-                                    logging.warning("No response text generated")
                             else:
                                 logging.warning(f"No active bot found for channel {business_channel_id}")
                                 
