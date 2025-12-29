@@ -11,7 +11,17 @@ sys.path.append(str(BASE_DIR))
 from app.db.base import Base
 from app.models import user, role, permission, channel, refresh_token  # 👈 IMPORTA TODOS
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 config = context.config
+
+# Overwrite sqlalchemy.url with the environment variable if present
+database_url = os.getenv("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
