@@ -61,6 +61,7 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                         for msg in value["messages"]:
                             from_num = msg["from"]
                             text = msg.get("text", {}).get("body")
+                            print(f"DEBUG: Received message from {from_num}: {text}")
                             if not text:
                                 continue
                                 
@@ -77,7 +78,7 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                             
                             if bot and bot.is_active:
                                 response_text = None
-                                logging.info(f"Found active bot: {bot.name}")
+                                print(f"DEBUG: Found active bot: {bot.name}")
                                 
                                 # 1. Hybrid Rule Engine
                                 if bot.hybrid_mode and bot.rule_set:
@@ -109,10 +110,10 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                                 
                                 # 4. Send
                                 if response_text:
-                                    logging.info(f"Sending message to {from_num}")
+                                    print(f"DEBUG: Sending message to {from_num}: {response_text}")
                                     meta = MetaService(channel.token, phone_id)
                                     send_res = await meta.send_whatsapp_message(from_num, response_text)
-                                    logging.info(f"Meta send response: {send_res}")
+                                    print(f"DEBUG: Meta send response: {send_res}")
                                 else:
                                     logging.warning("No response text generated")
                             else:

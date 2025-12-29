@@ -61,7 +61,7 @@ class AIService:
         return None
 
     async def chat(self, db: AsyncSession, business_id: int, user_message: str, chat_history: List[dict] = []) -> str:
-        logging.info(f"Processing native AI chat for business {business_id}")
+        print(f"DEBUG: Processing native AI chat for business {business_id} - Msg: {user_message}")
         
         products = await self.get_active_products(db, business_id)
         intent = self.detect_intent(user_message)
