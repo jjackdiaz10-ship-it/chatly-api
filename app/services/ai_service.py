@@ -23,25 +23,31 @@ class AIService:
         self.business_name = self.config.get("business_name", "nuestra tienda")
 
     async def get_context(self, db: AsyncSession, business_id: int) -> Dict[str, Any]:
-        result = await db.execute(select(Business).where(Business.id == business_id))
-        biz = result.scalar_one_or_none()
+        from app.models.category import Category
+        # 1. Strict Stock Filtering (as requested)
+        biz_res = await db.execute(select(Business).where(Business.id == business_id))
+        biz = biz_res.scalar_one_or_none()
         
-        # Robustness: Stock check
+        cat_res = await db.execute(select(Category).where(Category.business_id == business_id))
+        categories = cat_res.scalars().all()
+
         prod_result = await db.execute(
             select(Product).where(
                 Product.business_id == business_id, 
                 Product.is_active == True,
-                Product.stock > 0 # Only show what we have
+                Product.stock > 0 # Back to strict stock
             )
         )
         products = prod_result.scalars().all()
         
         return {
             "business": biz,
+            "categories": categories,
             "products": products
         }
 
     async def get_or_create_cart(self, db: AsyncSession, business_id: int, user_phone: str) -> Cart:
+        # Include metadata for simple state tracking
         result = await db.execute(
             select(Cart).where(Cart.business_id == business_id, Cart.user_phone == user_phone, Cart.is_active == True)
         )
@@ -49,175 +55,206 @@ class AIService:
         if not cart:
             cart = Cart(business_id=business_id, user_phone=user_phone)
             db.add(cart)
-            await db.flush() # Get ID
+            await db.flush()
         return cart
 
-    def detect_intent(self, message: str) -> str:
+    def analyze_semantics(self, message: str) -> Dict[str, float]:
+        """
+        Ultra-Advanced Semantic Scoring Engine.
+        Analyzes every word and assigns scores to possible intents.
+        """
         message = message.lower().strip()
-        if any(word in message for word in ["hola", "buenas", "buenos dias", "tardes", "noches"]): return "greeting"
-        if any(word in message for word in ["comprar", "quiero", "pagar", "link", "adquirir", "listo", "cerrar", "finalizar"]): return "checkout"
-        if any(word in message for word in ["precio", "cuanto cuesta", "valor", "cuánto", "costo", "vale"]): return "price"
-        if any(word in message for word in ["catalogo", "productos", "qué tienes", "lista", "muéstrame"]): return "catalog"
-        if any(word in message for word in ["carrito", "qué tengo", "mi pedido", "pedido"]): return "view_cart"
-        if any(word in message for word in ["borrar", "limpiar", "vaciar"]): return "clear_cart"
-        return "general"
+        words = re.findall(r'\w+', message)
+        
+        scores = {
+            "greeting": 0.0,
+            "catalog": 0.0,
+            "checkout": 0.0,
+            "view_cart": 0.0,
+            "clear_cart": 0.0,
+            "help": 0.0
+        }
+        
+        weights = {
+            "greeting": ["hola", "buenas", "dias", "tardes", "noches", "hey", "saludos", "inicio"],
+            "catalog": ["ver", "catalogo", "productos", "tienda", "comprar", "lista", "inventario", "que", "tienes", "mostrar"],
+            "checkout": ["pagar", "listo", "cerrar", "finalizar", "ok", "vale", "confirmar", "link", "pago", "comprar", "adquirir"],
+            "view_cart": ["carrito", "pedido", "compras", "tengo", "mi", "ver", "revisar"],
+            "clear_cart": ["borrar", "limpiar", "vaciar", "cancelar", "quitar", "eliminar"],
+            "help": ["ayuda", "asistencia", "humano", "persona", "soporte"]
+        }
+        
+        for intent, keywords in weights.items():
+            for word in words:
+                if word in keywords:
+                    scores[intent] += 1.3 # Match weight
+                # Typo tolerance
+                elif len(word) > 3:
+                    matches = difflib.get_close_matches(word, keywords, n=1, cutoff=0.8)
+                    if matches:
+                        scores[intent] += 0.8
+        
+        return scores
+
+    def get_best_intent(self, scores: Dict[str, float]) -> str:
+        max_score = max(scores.values())
+        if max_score < 0.5:
+            return "general"
+        return max(scores, key=scores.get)
 
     def match_product(self, message: str, products: List[Product]) -> Optional[Product]:
         message = message.lower()
-        # Direct word match
-        for p in products:
+        # Analyze multi-word matches first
+        for p in sorted(products, key=lambda x: len(x.name), reverse=True):
             if p.name.lower() in message:
                 return p
-        # Fuzzy match
-        product_names = [p.name.lower() for p in products]
-        words = message.split()
-        for word in words:
-            if len(word) < 4: continue
-            matches = difflib.get_close_matches(word, product_names, n=1, cutoff=0.7)
-            if matches:
-                return next(p for p in products if p.name.lower() == matches[0])
+        # Token-based match
+        words = re.findall(r'\w+', message)
+        for p in products:
+            p_words = p.name.lower().split()
+            matches = 0
+            for w in words:
+                if w in p_words: matches += 1
+            if matches >= (len(p_words) / 2) and matches > 0:
+                return p
         return None
 
     async def chat(self, db: AsyncSession, business_id: int, user_phone: str, user_message: str) -> Tuple[Any, str]:
-        """
-        Returns (content, msg_type)
-        msg_type can be "text" or "interactive"
-        """
         ctx = await self.get_context(db, business_id)
         products = ctx["products"]
-        intent = self.detect_intent(user_message)
+        scores = self.analyze_semantics(user_message)
+        intent = self.get_best_intent(scores)
         matched_prod = self.match_product(user_message, products)
-        cart = await self.get_or_create_cart(db, business_id, user_phone)
+        cart = await db.merge(await self.get_or_create_cart(db, business_id, user_phone))
 
-        # 1. Check Rules First (Mastermind prioritizes defined rules)
+        # VARIATION SYSTEM (To avoid repeating the same responses)
+        import random
+        greetings = [
+            f"¡Hola! Bienvenido a {ctx['business'].name if ctx['business'] else self.business_name}. ¿Cómo puedo asistirte hoy? 🚀",
+            f"¡Saludos! Es un gusto saludarte en {self.business_name}. ¿Qué estás buscando hoy?",
+            "¡Hola! Soy tu asistente experto. Estoy aquí para ayudarte con tu compra. 😊"
+        ]
+
+        # 1. Rules first
         from app.services.rule_engine import RuleEngine
         rule_match = RuleEngine.match(user_message, self.rules)
-        if rule_match:
-            return rule_match, "text"
+        if rule_match: return rule_match, "text"
 
-        # 2. Intent logic
         if intent == "greeting":
             return {
                 "type": "button",
-                "body": {"text": f"¡Hola! Bienvenido a {self.business_name}. Soy tu asistente inteligente. ¿Cómo te puedo ayudar hoy?"},
+                "body": {"text": random.choice(greetings)},
                 "action": {
                     "buttons": [
-                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Ver Catálogo"}},
-                        {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido"}}
+                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Ver Catálogo 🛍️"}},
+                        {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}
                     ]
                 }
             }, "interactive"
 
         if intent == "catalog":
             if not products:
-                return "Lo siento, no tenemos productos disponibles en este momento.", "text"
+                return "Lo siento, actualmente no tenemos productos con stock disponible. ¡Vuelve pronto!", "text"
             
             rows = []
             for p in products[:10]:
                 rows.append({
                     "id": f"prod_{p.id}",
                     "title": p.name[:24],
-                    "description": f"${p.price} (Stock: {p.stock}) - {p.description[:40] if p.description else ''}"
+                    "description": f"${p.price} - Stock: {p.stock}"
                 })
             
             return {
                 "type": "list",
-                "header": {"type": "text", "text": "Catálogo de Productos"},
-                "body": {"text": f"Explora lo que tenemos para ti en {self.business_name}:"},
-                "footer": {"text": "Toca un producto para verlo"},
+                "header": {"type": "text", "text": "Catálogo Disponible 🛍️"},
+                "body": {"text": "Selecciona un producto para agregarlo a tu pedido:"},
+                "footer": {"text": "Solo mostramos productos con stock"},
                 "action": {
                     "button": "Ver Productos",
-                    "sections": [{"title": "Disponibles", "rows": rows}]
+                    "sections": [{"title": "Destacados", "rows": rows}]
                 }
             }, "interactive"
 
         if matched_prod:
-            if any(w in user_message.lower() for w in ["quiero", "comprar", "agrega", "pon"]):
-                if matched_prod.stock <= 0:
-                    return f"Lo siento, el producto '{matched_prod.name}' está agotado temporalmente.", "text"
-                
-                item_res = await db.execute(select(CartItem).where(CartItem.cart_id == cart.id, CartItem.product_id == matched_prod.id))
+            # Check price/info intent vs add intent
+            if any(w in user_message.lower() for w in ["quiero", "comprar", "agrega", "pon", "suma", "añadir", "dame"]):
+                from sqlalchemy import and_
+                item_res = await db.execute(select(CartItem).where(and_(CartItem.cart_id == cart.id, CartItem.product_id == matched_prod.id)))
                 item = item_res.scalar_one_or_none()
                 if item:
                     item.quantity += 1
                 else:
                     db.add(CartItem(cart_id=cart.id, product_id=matched_prod.id))
                 await db.commit()
-                return f"¡Añadido! He puesto '{matched_prod.name}' en tu carrito. ¿Deseas explorar más productos o quieres finalizar tu compra?", "text"
+                
+                summaries = [
+                    f"✅ ¡Excelente elección! He añadido '{matched_prod.name}' a tu pedido.",
+                    f"¡Listo! '{matched_prod.name}' ha sido agregado. ¿Quieres algo más?",
+                    f"Genial, '{matched_prod.name}' ya está en tu carrito. 🛒"
+                ]
+                return random.choice(summaries), "text"
             
-            return f"El '{matched_prod.name}' está disponible por ${matched_prod.price}. ¿Te gustaría agregarlo a tu pedido?", "text"
+            return f"El '{matched_prod.name}' está disponible por ${matched_prod.price}. Tenemos {matched_prod.stock} unidades. ¿Te gustaría agregarlo?", "text"
 
         if intent == "view_cart":
-            # Refresh cart with items
-            cart_res = await db.execute(select(Cart).where(Cart.id == cart.id))
-            cart = cart_res.scalar_one()
-            
             items_res = await db.execute(select(CartItem).where(CartItem.cart_id == cart.id))
             items = items_res.scalars().all()
-            
-            if not items:
-                return "Tu carrito está vacío. ¿Quieres ver el catálogo?", "text"
+            if not items: return "Tu carrito está vacío. ¿Te gustaría ver nuestro catálogo de hoy? 🛍️", "text"
             
             total = 0
             summary = []
             for item in items:
-                prod_res = await db.execute(select(Product).where(Product.id == item.product_id))
-                p = prod_res.scalar_one()
-                line_total = float(p.price) * item.quantity
-                total += line_total
-                summary.append(f"- {p.name} x{item.quantity} (${round(line_total, 2)})")
+                p_res = await db.execute(select(Product).where(Product.id == item.product_id))
+                p = p_res.scalar_one()
+                line = float(p.price) * item.quantity
+                total += line
+                summary.append(f"• {p.name} x{item.quantity} (${round(line, 2)})")
             
-            summary_str = "\n".join(summary)
             return {
                 "type": "button",
-                "body": {"text": f"Tu Pedido Actual:\n\n{summary_str}\n\n*TOTAL: ${round(total, 2)}*"},
+                "body": {"text": f"🛒 *Resumen de tu Pedido:*\n\n" + "\n".join(summary) + f"\n\n💰 *TOTAL: ${round(total, 2)}*"},
                 "action": {
                     "buttons": [
-                        {"type": "reply", "reply": {"id": "checkout", "title": "Pagar Ahora"}},
-                        {"type": "reply", "reply": {"id": "clear_cart", "title": "Vaciar Carrito"}}
+                        {"type": "reply", "reply": {"id": "checkout", "title": "Finalizar Compra 💳"}},
+                        {"type": "reply", "reply": {"id": "clear_cart", "title": "Vaciar Todo 🗑️"}}
                     ]
                 }
             }, "interactive"
 
-        if intent == "checkout" or "link" in user_message.lower():
+        if intent == "checkout":
             items_res = await db.execute(select(CartItem).where(CartItem.cart_id == cart.id))
             items = items_res.scalars().all()
-            
-            if not items:
-                return "No tienes productos en tu pedido aún.", "text"
+            if not items: return "Para finalizar, primero debes añadir productos. ¿Quieres ver el catálogo?", "text"
             
             total = 0
             for item in items:
-                prod_res = await db.execute(select(Product).where(Product.id == item.product_id))
-                p = prod_res.scalar_one()
+                p_res = await db.execute(select(Product).where(Product.id == item.product_id))
+                p = p_res.scalar_one()
                 total += (float(p.price) * item.quantity)
             
             total = round(total, 2)
             
-            # If they click the button or ask specifically for the link
-            if "obtener" in user_message.lower() or "pagar ahora" in user_message.lower():
-                # Close cart finally
+            # Intelligent step: if they already confirmed or just said "ok/finalizar"
+            if any(w in user_message.lower() for w in ["si", "confirmar", "link", "pago", "dame", "enviar"]):
                 cart.is_active = False
                 await db.commit()
-                return f"¡Aquí tienes! Tu link de pago seguro por ${total}:\n\nhttps://pagos.chatly.io/pay/{business_id}?amount={total}&ref={user_phone}\n\nGracias por tu compra en {self.business_name}.", "text"
+                return f"¡Hecho! 🌟 Tu link de pago por ${total} es:\n\nhttps://pagos.chatly.io/pay/{business_id}?amount={total}&ref={user_phone}\n\n¡Gracias por tu compra!", "text"
 
-            # Initial checkout intent: show buttons for design
             return {
                 "type": "button",
-                "body": {"text": f"¡Excelente! Tu pedido por ${total} está listo. Haz clic abajo para completar tu pago de forma segura."},
+                "body": {"text": f"Todo está listo para tu pedido de ${total}. ¿Quieres que te envíe el link de pago ahora?"},
                 "action": {
                     "buttons": [
-                        {"type": "reply", "reply": {"id": "paid_link", "title": "Pagar Ahora"}}
+                        {"type": "reply", "reply": {"id": "get_link", "title": "Sí, enviar link 💳"}},
+                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Seguir viendo �️"}}
                     ]
                 }
             }, "interactive"
-            # Return link as text for now as URL buttons are not always available in standard reply buttons
-            # wait, I'll just send the text link AFTER the button if I can, or just keep it simple.
-            # Actually, I'll return a robust text with the link but formatted nicely.
 
         if intent == "clear_cart":
             await db.execute(delete(CartItem).where(CartItem.cart_id == cart.id))
             await db.commit()
-            return "He vaciado tu carrito. ¿En qué más puedo ayudarte?", "text"
+            return "Tu carrito ha sido vaciado. ¿En qué más puedo ayudarte? 🧹", "text"
 
-        return f"Entiendo. En {self.business_name} estamos para servirte. ¿Quieres ver nuestro catálogo o consultar por algún producto?", "text"
+        # General / Fallback with more intelligence
+        return f"Entiendo. Estoy analizando tu mensaje... Si buscas productos, escribe 'catálogo'. Si quieres revisar tu compra, escribe 'carrito'. ¿En qué más te puedo ayudar en {self.business_name}?", "text"
