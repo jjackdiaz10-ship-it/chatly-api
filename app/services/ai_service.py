@@ -2,258 +2,320 @@
 import re
 import difflib
 import json
+import logging
+import random
+from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, and_
+from sqlalchemy.orm import selectinload
+
+# Modelos
 from app.models.product import Product
 from app.models.cart import Cart, CartItem
 from app.models.bot import Bot
 from app.models.business import Business
-from typing import List, Optional, Dict, Any, Tuple
-import logging
+from app.models.category import Category
+
+# Configuración de Logging profesional
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 class AIService:
     """
-    Mastermind Native Sales AI.
-    Features: Context-aware, Rule-integrated, Cart-managing, Interactive Suggestion generator.
+    Motor de Ventas Conversacional Mastermind v3.0 (Hybrid High-Performance).
+    Combina una arquitectura modular con lógica de cierre de alto impacto y persistencia robusta.
     """
+
     def __init__(self, bot: Optional[Bot] = None):
         self.bot = bot
         self.config = bot.config if bot else {}
-        self.rules = bot.rule_set if bot else []
-        self.business_name = self.config.get("business_name", "nuestra tienda")
-
-    async def get_context(self, db: AsyncSession, business_id: int) -> Dict[str, Any]:
-        from app.models.category import Category
-        # 1. Store Knowledge Base
-        biz_res = await db.execute(select(Business).where(Business.id == business_id))
-        biz = biz_res.scalar_one_or_none()
+        self.business_name = self.config.get("business_name", "Nuestra Tienda")
         
-        cat_res = await db.execute(select(Category).where(Category.business_id == business_id))
-        categories = cat_res.scalars().all()
+        # Umbrales de confianza para NLP
+        self.CONFIDENCE_THRESHOLD = 0.65
+        
+        # Diccionario de intenciones precompilado
+        self.INTENTS = {
+            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "check out", "listo"],
+            "view_cart": ["carrito", "pedido", "mi bolsa", "que llevo", "cuanto voy", "ver compra", "revisar"],
+            "catalog": ["catalogo", "productos", "lista", "que vendes", "menu", "inventario", "ver todo", "tienda"],
+            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "necesito", "comprar", "pon"],
+            "greeting": ["hola", "buenas", "hey", "inicio", "empezar", "saludos"],
+            "clear_cart": ["vaciar", "borrar todo", "limpiar carrito", "cancelar compra", "resetear"],
+            "negative": ["no", "nada", "parar", "basta", "gracias", "no mas", "asi esta bien"],
+            "positive": ["si", "dale", "claro", "por supuesto", "perfecto", "bueno", "ok"]
+        }
 
-        prod_result = await db.execute(
+    # --- 1. CORE: GESTIÓN DE DATOS ---
+
+    async def _get_context_data(self, db: AsyncSession, business_id: int):
+        """Carga optimizada de datos en una sola transacción."""
+        biz = await db.scalar(select(Business).where(Business.id == business_id))
+        categories = (await db.execute(select(Category).where(Category.business_id == business_id))).scalars().all()
+        
+        products = (await db.execute(
             select(Product).where(
-                Product.business_id == business_id, 
+                Product.business_id == business_id,
                 Product.is_active == True,
                 Product.stock > 0
             )
-        )
-        products = prod_result.scalars().all()
+        )).scalars().all()
         
-        return {
-            "business": biz,
-            "categories": categories,
-            "products": products
-        }
+        return biz, categories, products
 
-    async def get_or_create_cart(self, db: AsyncSession, business_id: int, user_phone: str) -> Cart:
-        result = await db.execute(
-            select(Cart).where(Cart.business_id == business_id, Cart.user_phone == user_phone, Cart.is_active == True)
-        )
-        cart = result.scalar_one_or_none()
+    async def _get_or_create_cart(self, db: AsyncSession, business_id: int, user_phone: str) -> Cart:
+        """Obtiene el carrito con carga anticipada (selectinload) para evitar bugs de 'carrito vacío'."""
+        stmt = select(Cart).where(
+            Cart.business_id == business_id,
+            Cart.user_phone == user_phone,
+            Cart.is_active == True
+        ).options(selectinload(Cart.items).selectinload(CartItem.product))
+        
+        cart = (await db.execute(stmt)).scalar_one_or_none()
+        
         if not cart:
-            cart = Cart(business_id=business_id, user_phone=user_phone)
+            cart = Cart(business_id=business_id, user_phone=user_phone, is_active=True)
             db.add(cart)
             await db.flush()
+            cart = (await db.execute(stmt)).scalar_one_or_none()
+            
         return cart
 
-    def analyze_semantics(self, message: str) -> Dict[str, float]:
-        message = message.lower().strip()
-        words = re.findall(r'\w+', message)
+    # --- 2. MOTOR NLP (INTELIGENCIA) ---
+
+    def _extract_intent(self, message: str) -> str:
+        msg = message.lower().strip()
+        scores = {k: 0.0 for k in self.INTENTS}
+        words = re.findall(r'\w+', msg)
         
-        scores = {
-            "greeting": 0.0,
-            "catalog": 0.0,
-            "category": 0.0,
-            "checkout": 0.0,
-            "view_cart": 0.0,
-            "positive": 0.0,
-            "negative": 0.0
-        }
-        
-        weights = {
-            "greeting": ["hola", "buenas", "hey", "inicio", "saludos"],
-            "catalog": ["ver", "catalogo", "productos", "tienda", "comprar", "lista", "inventario"],
-            "category": ["categoria", "seccion", "tipo", "clase", "rubro"],
-            "checkout": ["pagar", "finalizar", "listo", "cerrar", "pago", "total", "checkout", "terminar"],
-            "view_cart": ["carrito", "pedido", "compra", "tengo", "mi", "bolsa"],
-            "positive": ["si", "dale", "claro", "agrega", "pon", "quiero", "perfecto", "bueno", "ok"],
-            "negative": ["no", "nada", "asi", "bien", "basta", "gracias", "ningun", "parar"]
-        }
-        
-        for intent, keywords in weights.items():
+        for intent, keywords in self.INTENTS.items():
             for word in words:
-                if word in keywords: scores[intent] += 1.5
+                if word in keywords:
+                    scores[intent] += 1.2
                 elif len(word) > 3:
                     matches = difflib.get_close_matches(word, keywords, n=1, cutoff=0.85)
-                    if matches: scores[intent] += 1.0
-        
-        return scores
+                    if matches: scores[intent] += 0.8
 
-    async def get_related(self, db: AsyncSession, p: Product, all_p: List[Product]) -> Optional[Product]:
-        related = [x for x in all_p if x.category_id == p.category_id and x.id != p.id]
-        return random.choice(related) if related else None
+        best_intent = max(scores, key=scores.get)
+        if scores[best_intent] < 0.6:
+            return "search"
+            
+        return best_intent
+
+    def _extract_quantity(self, message: str) -> int:
+        patterns = [
+            r'(\d+)\s*(?:de|unidades|uds|u|cajas|items)',
+            r'(?:quiero|dame|pon|agrega|x)\s*(\d+)',
+            r'^(\d+)$'
+        ]
+        for p in patterns:
+            match = re.search(p, message.lower())
+            if match:
+                try:
+                    return min(int(match.group(1)), 99)
+                except ValueError: continue
+        return 1
+
+    def _find_product(self, message: str, products: List[Product]) -> Optional[Product]:
+        msg = message.lower()
+        if "prod_" in msg:
+            try:
+                pid = int(re.search(r'prod_(\d+)', msg).group(1))
+                return next((p for p in products if p.id == pid), None)
+            except: pass
+
+        # Coincidencia de frase exacta (prioridad nombres largos)
+        for p in sorted(products, key=lambda x: len(x.name), reverse=True):
+            if p.name.lower() in msg: return p
+        
+        # Intersección de tokens
+        msg_tokens = set(re.findall(r'\w+', msg))
+        best_match, best_score = None, 0
+        for p in products:
+            p_tokens = set(re.findall(r'\w+', p.name.lower()))
+            score = len(msg_tokens & p_tokens) / len(p_tokens) if p_tokens else 0
+            if score > 0.6 and score > best_score:
+                best_score, best_match = score, p
+                
+        return best_match
+
+    # --- 3. ORQUESTADOR ---
 
     async def chat(self, db: AsyncSession, business_id: int, user_phone: str, user_message: str) -> Tuple[Any, str]:
-        import random
-        ctx = await self.get_context(db, business_id)
-        products = ctx["products"]
-        categories = ctx["categories"]
-        scores = self.analyze_semantics(user_message)
-        intent = max(scores, key=scores.get) if max(scores.values()) > 0.8 else "general"
-        cart = await db.merge(await self.get_or_create_cart(db, business_id, user_phone))
-        meta = json.loads(cart.metadata_json or "{}")
+        try:
+            biz, categories, products = await self._get_context_data(db, business_id)
+            cart = await self._get_or_create_cart(db, business_id, user_phone)
+            intent = self._extract_intent(user_message)
+            matched = self._find_product(user_message, products)
+            
+            # Cierre inteligente: Si dice "no" o "nada más" y tiene cosas, vamos a checkout
+            if intent == "negative" and cart.items:
+                return await self._handle_checkout(db, cart, business_id, user_phone)
 
-        # Load Items
-        items_res = await db.execute(select(CartItem).where(CartItem.cart_id == cart.id))
-        items = items_res.scalars().all()
+            # Lógica de adición
+            if matched and (intent == "add_to_cart" or intent == "search" or user_message.startswith("prod_")):
+                return await self._handle_add_to_cart(db, cart, matched, user_message, products)
 
-        # PERSISTENT STATE MACHINE LOGIC
-        # 1. Check if user clicked a Product from List or mentioned it
-        matched_prod = None
-        # Check if message is a Product ID from List (e.g., "prod_5")
-        if user_message.startswith("prod_"):
-            try:
-                pid = int(user_message.replace("prod_", ""))
-                matched_prod = next((p for p in products if p.id == pid), None)
-            except: pass
+            # Enrutamiento modular
+            if intent == "catalog" or user_message.startswith("cat_"):
+                return self._handle_catalog(products, categories, user_message)
+            
+            elif intent == "view_cart" or (intent == "positive" and cart.items):
+                return self._handle_view_cart(cart)
+            
+            elif intent == "checkout":
+                return await self._handle_checkout(db, cart, business_id, user_phone)
+            
+            elif intent == "clear_cart":
+                return await self._handle_clear_cart(db, cart)
+                
+            elif intent == "greeting":
+                return self._handle_greeting(biz.name if biz else self.business_name)
+
+            # Fallback Persuasivo
+            return self._handle_fallback(user_message, products, cart)
+
+        except Exception as e:
+            logger.error(f"Error en chat: {e}", exc_info=True)
+            return "⚠️ Perdona, tuve un pequeño problema técnico. ¿Podrías intentar de nuevo o escribir 'inicio'?", "text"
+
+    # --- 4. HANDLERS ---
+
+    async def _handle_add_to_cart(self, db, cart, product, message, all_p):
+        qty = self._extract_quantity(message)
+        if product.stock < qty:
+            return f"😅 ¡Lo siento! Solo me quedan {product.stock} unidades de *{product.name}*. ¿Te gustaría llevar esas?", "text"
+
+        item = next((i for i in cart.items if i.product_id == product.id), None)
+        if item: item.quantity += qty
+        else:
+            new_item = CartItem(cart_id=cart.id, product_id=product.id, quantity=qty)
+            db.add(new_item)
+            cart.items.append(new_item)
         
-        if not matched_prod:
-            # Fuzzy match in names
-            for p in sorted(products, key=lambda x: len(x.name), reverse=True):
-                if p.name.lower() in user_message.lower():
-                    matched_prod = p
-                    break
+        await db.commit()
 
-        # ACTION: ADD TO CART (Professional Flow)
-        if matched_prod and any(w in user_message.lower() for w in ["quiero", "comprar", "agrega", "vende", "pon", "da", "añadir", "dame", "prod_"]):
-            from sqlalchemy import and_
-            item_res = await db.execute(select(CartItem).where(and_(CartItem.cart_id == cart.id, CartItem.product_id == matched_prod.id)))
-            item = item_res.scalar_one_or_none()
-            if item: item.quantity += 1
-            else: db.add(CartItem(cart_id=cart.id, product_id=matched_prod.id))
-            
-            # Update state for follow-up
-            meta["last_prod_id"] = matched_prod.id
-            cart.metadata_json = json.dumps(meta)
-            await db.commit()
-            
-            # Suggest Upsell
-            rel = await self.get_related(db, matched_prod, products)
-            msg = f"✅ *¡Excelente elección!* He añadido '{matched_prod.name}' a tu pedido.\n\n"
-            if rel:
-                msg += f"💡 *Recomendación Experta:* Muchos clientes también llevan el '{rel.name}' por solo ${rel.price}. ¿Te gustaría que lo agregue también?\n\n"
-            
-            return {
-                "type": "button",
-                "body": {"text": msg + "¿Deseas algo más o quieres finalizar tu compra ahora?"},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Ver más 🏙️"}},
-                        {"type": "reply", "reply": {"id": "checkout", "title": "Pagar Ahora 💳"}}
-                    ]
-                }
-            }, "interactive"
+        # Cross-selling (Upsell)
+        rel_p = [p for p in all_p if p.category_id == product.category_id and p.id != product.id]
+        upsell_text = ""
+        if rel_p:
+            u = random.choice(rel_p)
+            upsell_text = f"\n💡 *Sugerencia:* Muchos clientes también llevan el *{u.name}* (${u.price})."
 
-        # ACTION: CATEGORY SELECTION
-        if user_message.startswith("cat_"):
-            cid = int(user_message.replace("cat_", ""))
-            cat_prods = [p for p in products if p.category_id == cid]
-            if not cat_prods: return "Esta sección está vacía por ahora. 😊", "text"
+        total = sum(i.quantity * i.product.price for i in cart.items)
+        return {
+            "type": "button",
+            "body": {
+                "text": f"✅ *¡Añadido!* He sumado {qty}x {product.name} a tu pedido.\n\n"
+                        f"� Total hasta ahora: *${total:,.0f}*{upsell_text}\n\n"
+                        "¿Quieres ver algo más o prefieres pagar ahora?"
+            },
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "checkout", "title": "Pagar Ahora 💳"}},
+                    {"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo �️"}}
+                ]
+            }
+        }, "interactive"
+
+    def _handle_catalog(self, products, categories, message):
+        if message.startswith("cat_"):
+            cid = int(message.replace("cat_", ""))
+            prods = [p for p in products if p.category_id == cid]
+            if not prods: return "Esta sección está vacía por ahora. 🌟", "text"
             
-            rows = [{"id": f"prod_{p.id}", "title": p.name[:24], "description": f"${p.price} - Stock: {p.stock}"} for p in cat_prods[:10]]
+            rows = [{"id": f"prod_{p.id}", "title": p.name[:24], "description": f"${p.price} | Stock: {p.stock}"} for p in prods[:10]]
             return {
                 "type": "list",
-                "header": {"type": "text", "text": "Sección Seleccionada 📍"},
-                "body": {"text": "Toca el producto que desees para agregarlo:"},
-                "footer": {"text": "Precios con IVA incluido"},
-                "action": {
-                    "button": "Ver Productos",
-                    "sections": [{"title": "Disponibles", "rows": rows}]
-                }
+                "header": {"type": "text", "text": "🎯 Catálogo Especial"},
+                "body": {"text": "Toca un producto para añadirlo a tu compra:"},
+                "action": {"button": "Ver Productos", "sections": [{"title": "Disponibles", "rows": rows}]}
             }, "interactive"
 
-        # INTENTS
-        if intent == "greeting":
+        rows = [{"id": f"cat_{c.id}", "title": c.name[:24], "description": "Ver productos"} for c in categories]
+        return {
+            "type": "list",
+            "header": {"type": "text", "text": "�️ Nuestra Tienda"},
+            "body": {"text": "He organizado todo por categorías para tu comodidad. ¿Cuál deseas explorar?"},
+            "action": {"button": "Abrir Secciones", "sections": [{"title": "Categorías", "rows": rows}]}
+        }, "interactive"
+
+    async def _handle_checkout(self, db, cart, business_id, user_phone):
+        if not cart.items:
+            return "🛒 Tu carrito está vacío. ¡Mira nuestro catálogo para empezar! 🛍️", "text"
+        
+        total = sum(i.quantity * i.product.price for i in cart.items)
+        summary = "\n".join([f"▪ {i.quantity}x {i.product.name} (${i.quantity*i.product.price:,.0f})" for i in cart.items])
+        
+        # El link se envía en el BODY como texto, ya que 'url' no es un botón interactive estándar soportado globalmente en este flujo.
+        payment_link = f"https://pagos.chatly.io/pay/{business_id}?amount={total}&ref={user_phone}"
+        
+        # Marcamos como inactivo para que la próxima compra sea un carrito nuevo
+        cart.is_active = False
+        await db.commit()
+
+        return f"🌟 *¡Excelente elección!* Tu pedido está listo.\n\n" \
+               f"� *Resumen:*\n{summary}\n\n" \
+               f"💰 *Total Final: ${total:,.0f}*\n\n" \
+               f"Paga aquí de forma segura para procesar tu envío: {payment_link}\n\n" \
+               f"¡Gracias por confiar en {self.business_name}! �", "text"
+
+    def _handle_view_cart(self, cart):
+        if not cart.items:
+            return "🛒 Tu carrito está esperando su primer producto. ¿Vemos el catálogo?", "text"
+        
+        items_desc = "\n".join([f"• {i.quantity}x {i.product.name} (${i.quantity*i.product.price:,.0f})" for i in cart.items])
+        total = sum(i.quantity * i.product.price for i in cart.items)
+        
+        return {
+            "type": "button",
+            "body": {"text": f"🧐 *Tu Pedido Actual:*\n\n{items_desc}\n\n💰 *Total: ${total:,.0f}*"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "checkout", "title": "Pagar Ahora 💳"}},
+                    {"type": "reply", "reply": {"id": "clear_cart", "title": "Vaciar Carrito 🗑️"}}
+                ]
+            }
+        }, "interactive"
+
+    async def _handle_clear_cart(self, db, cart):
+        await db.execute(delete(CartItem).where(CartItem.cart_id == cart.id))
+        await db.commit()
+        return "🧹 Carrito vaciado con éxito. ¿Deseas empezar de nuevo?", "text"
+
+    def _handle_greeting(self, biz_name):
+        return {
+            "type": "button",
+            "body": {"text": f"👋 ¡Hola! Bienvenido a *{biz_name}*.\n\nSoy tu asesor comercial inteligente. ¿Deseas ver nuestra colección o revisar algo que ya tengas en mente?"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}},
+                    {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}
+                ]
+            }
+        }, "interactive"
+
+    def _handle_fallback(self, message, products, cart):
+        if cart.items:
+            total = sum(i.quantity * i.product.price for i in cart.items)
             return {
                 "type": "button",
-                "body": {"text": f"¡Hola! Bienvenido a *{ctx['business'].name if ctx['business'] else self.business_name}*. 🚀\n\nSoy tu asesor comercial inteligente. ¿Cómo te puedo ayudar hoy?"},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Explorar Tienda �"}},
-                        {"type": "reply", "reply": {"id": "checkout", "title": "Finalizar Pedido �"}}
-                    ]
-                }
-            }, "interactive"
-
-        if intent == "catalog":
-            if len(categories) > 1:
-                rows = [{"id": f"cat_{c.id}", "title": c.name[:24], "description": "Ver productos de esta sección"} for c in categories]
-                return {
-                    "type": "list",
-                    "header": {"type": "text", "text": "Catálogo General 🛍️"},
-                    "body": {"text": "Para tu comodidad, he dividido la tienda por categorías. ¿Cuál deseas explorar?"},
-                    "footer": {"text": "Chatly Sales AI"},
-                    "action": {
-                        "button": "Seleccionar Categoría",
-                        "sections": [{"title": "Categorías", "rows": rows}]
-                    }
-                }, "interactive"
-            else:
-                rows = [{"id": f"prod_{p.id}", "title": p.name[:24], "description": f"${p.price} - Stock: {p.stock}"} for p in products[:10]]
-                return {
-                    "type": "list",
-                    "header": {"type": "text", "text": "Nuestra Vitrina 💎"},
-                    "body": {"text": "Toca un producto para añadirlo de inmediato:"},
-                    "action": {
-                        "button": "Ver Productos",
-                        "sections": [{"title": "Disponibles", "rows": rows}]
-                    }
-                }, "interactive"
-
-        if intent == "view_cart":
-            if not items: return "Tu carrito está esperando por su primera compra. 😊 ¿Vemos el catálogo?", "text"
-            total = sum(float(i.product.price) * i.quantity for i in items)
-            summary = "\n".join([f"• {i.product.name} x{i.quantity} (${round(float(i.product.price)*i.quantity, 2)})" for i in items])
-            return {
-                "type": "button",
-                "body": {"text": f"�️ *Resumen de tu Pedido:*\n\n{summary}\n\n� *TOTAL: ${round(total, 2)}*"},
+                "body": {"text": f"📍 *Nota:* No estoy seguro de haber entendido eso, pero veo que tienes un pedido por *${total:,.0f}* pendiente.\n\n¿Deseas finalizar el pago o seguir explorando?"},
                 "action": {
                     "buttons": [
                         {"type": "reply", "reply": {"id": "checkout", "title": "Pagar Ahora 💳"}},
-                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Seguir Comprando 🛍️"}}
+                        {"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}
                     ]
                 }
             }, "interactive"
 
-        # CLOSING LOGIC (Conversion Focus)
-        if intent == "checkout" or (intent == "negative" and items):
-            total = sum(float(i.product.price) * i.quantity for i in items)
-            if total <= 0: return "Tu pedido está vacío. 🛒 ¿Te muestro el catálogo?", "text"
-            
-            # If user confirms or said No thanks (closing time)
-            if any(w in user_message.lower() for w in ["si", "dale", "ok", "pago", "link", "gracias", "listo", "cerrar", "finalizar", "nada"]):
-                cart.is_active = False
-                await db.commit()
-                return f"🔥 *¡Trato hecho!* 🔥\n\nTu pedido por *${round(total, 2)}* ha sido reservado.\n\nPaga de forma segura aquí: https://pagos.chatly.io/pay/{business_id}?amount={total}&ref={user_phone}\n\nEn cuanto recibamos el pago, procesaremos tu envío. ¡Gracias por confiar en {self.business_name}!", "text"
-
-            return {
-                "type": "button",
-                "body": {"text": f"¡Excelente decisión! Tienes una compra espectacular por *${round(total, 2)}*.\n\n¿Generamos el link de pago ahora mismo para asegurar tu stock antes de que se agote?"},
-                "action": {
-                    "buttons": [
-                        {"type": "reply", "reply": {"id": "paid_link", "title": "Sí, enviar link 💳"}},
-                        {"type": "reply", "reply": {"id": "view_catalog", "title": "Ver más 🛍️"}}
-                    ]
-                }
-            }, "interactive"
-
-        if matched_prod:
-            return f"¡Buena elección! El '{matched_prod.name}' tiene un valor de ${matched_prod.price} y nos quedan {matched_prod.stock} unidades. ¿Te gustaría agregarlo a tu pedido ahora mismo? ✅", "text"
-
-        if intent == "clear_cart":
-            await db.execute(delete(CartItem).where(CartItem.cart_id == cart.id))
-            await db.commit()
-            return "Carrito vaciado con éxito. 🗑️ ¿Deseas empezar de nuevo?", "text"
-
-        return f"Entiendo perfectamente. En {self.business_name} estamos para asesorarte. 🚀 ¿Deseas ver el catálogo o prefieres revisar tu pedido actual?", "text"
+        return {
+            "type": "button",
+            "body": {"text": "🤔 No logré captar eso último. ¿Te gustaría ver nuestro catálogo oficial o prefieres que un humano te ayude?"},
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}},
+                    {"type": "reply", "reply": {"id": "help", "title": "Hablar con alguien �"}}
+                ]
+            }
+        }, "interactive"
