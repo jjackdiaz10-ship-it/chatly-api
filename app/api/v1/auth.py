@@ -13,8 +13,9 @@ from app.core.security import (
     refresh_token_expiry
 )
 from sqlalchemy.orm import selectinload
-from app.schemas.login import LoginResponseSchema
+from app.schemas.login import LoginResponseSchema, TokenSchema
 from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES
+from datetime import datetime
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -98,11 +99,11 @@ async def login(
 
 
 @router.post("/refresh")
-async def refresh_token(token: str, db: AsyncSession = Depends(get_db)):
+async def refresh_token(req: TokenSchema, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(RefreshToken)
         .where(
-            RefreshToken.token == token,
+            RefreshToken.token == req.token,
             RefreshToken.revoked == False
         )
     )
@@ -131,9 +132,9 @@ async def refresh_token(token: str, db: AsyncSession = Depends(get_db)):
     return {"access_token": access_token}
 
 @router.post("/logout")
-async def logout(token: str, db: AsyncSession = Depends(get_db)):
+async def logout(req: TokenSchema, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(RefreshToken).where(RefreshToken.token == token)
+        select(RefreshToken).where(RefreshToken.token == req.token)
     )
     rt = result.scalar_one_or_none()
 

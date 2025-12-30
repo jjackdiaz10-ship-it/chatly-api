@@ -16,6 +16,8 @@ from app.models.bot import Bot
 from app.models.business import Business
 from app.models.category import Category
 from app.models.knowledge_base import KnowledgeBase
+from app.models.subscription import Subscription
+from app.models.plan import Plan
 
 # Configuración de Logging profesional
 logger = logging.getLogger(__name__)
@@ -25,12 +27,15 @@ class AIService:
     """
     Motor de Ventas Conversacional Mastermind v360 (Vambe-Style).
     Incluye manejo de Base de Conocimientos (FAQs), recuperación y cierre agresivo.
+    Dinamizado por el Plan de Suscripción del Negocio.
     """
 
     def __init__(self, bot: Optional[Bot] = None):
         self.bot = bot
         self.config = bot.config if bot else {}
         self.business_name = self.config.get("business_name", "Nuestra Tienda")
+        self.ai_model = "GPT-3.5-Turbo" # Default
+        self.plan_name = "Trial"
         
         # Umbrales de confianza para NLP
         self.CONFIDENCE_THRESHOLD = 0.65
@@ -49,7 +54,24 @@ class AIService:
 
     # --- 1. CORE: GESTIÓN DE DATOS ---
 
+    async def _fetch_plan_config(self, db: AsyncSession, business_id: int):
+        """Detecta el plan activo y configura el modelo de IA correspondiente."""
+        stmt = (
+            select(Subscription)
+            .options(selectinload(Subscription.plan))
+            .where(Subscription.business_id == business_id, Subscription.is_active == True)
+        )
+        sub = (await db.execute(stmt)).scalar_one_or_none()
+        
+        if sub and sub.plan:
+            self.plan_name = sub.plan.name
+            self.ai_model = sub.plan.features.get("ai_model", "Gemini 2.5 Flash")
+        else:
+            self.plan_name = "Iris Lite"
+            self.ai_model = "Gemini 1.5 Flash" # Base model
+
     async def _get_context_data(self, db: AsyncSession, business_id: int):
+        await self._fetch_plan_config(db, business_id)
         biz = await db.scalar(select(Business).where(Business.id == business_id))
         categories = (await db.execute(select(Category).where(Category.business_id == business_id))).scalars().all()
         products = (await db.execute(select(Product).where(Product.business_id == business_id, Product.is_active == True, Product.stock > 0))).scalars().all()
@@ -180,7 +202,7 @@ class AIService:
                 return await self._handle_clear_cart(db, cart)
                 
             elif intent == "greeting":
-                return self._handle_greeting(biz.name if biz else self.business_name)
+                return await self._handle_greeting(biz.name if biz else self.business_name)
 
             return self._handle_fallback(user_message, products, cart)
 
@@ -236,8 +258,12 @@ class AIService:
         await db.commit()
         return "🧹 Carrito limpio. ¿Empezamos de nuevo?", "text"
 
-    def _handle_greeting(self, biz_name):
-        return {"type": "button", "body": {"text": f"👋 ¡Hola! Bienvenido a *{biz_name}*.\n\nSoy tu asesor comercial 24/7. ¿Cómo puedo ayudarte hoy?"}, "action": {"buttons": [{"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}, {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}]}}, "interactive"
+    async def _handle_greeting(self, biz_name):
+        model_badge = f" [Powered by {self.ai_model}]" if self.plan_name != "Iris Lite" else ""
+        return {
+            "type": "button",
+            "body": {"text": f"👋 ¡Hola! Bienvenido a *{biz_name}*.\n\nSoy tu asesor comercial 24/7.{model_badge}\n\n¿Cómo puedo ayudarte hoy?"},
+            "action": {"buttons": [{"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}, {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}]}}, "interactive"
 
     def _handle_fallback(self, message, products, cart):
         return {"type": "button", "body": {"text": "🤔 No logré captar eso. ¿Te gustaría ver nuestro catálogo oficial o revisar tu pedido?"}, "action": {"buttons": [{"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}, {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}]}}, "interactive"

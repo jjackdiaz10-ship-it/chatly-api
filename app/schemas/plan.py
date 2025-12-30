@@ -20,13 +20,26 @@ class PlanOut(PlanBase):
     class Config:
         from_attributes = True
 
+class SubscriptionCreate(BaseModel):
+    business_id: int
+    plan_id: int
+    billing_cycle: str = "monthly"
+    is_active: bool = True
+
+class SubscriptionUpdate(BaseModel):
+    plan_id: Optional[int] = None
+    billing_cycle: Optional[str] = None
+    is_active: Optional[bool] = None
+
 class SubscriptionOut(BaseModel):
     id: int
     business_id: int
-    plan: PlanOut
+    plan_id: int
+    plan: Optional[PlanOut] = None
     is_active: bool
     billing_cycle: str
     current_period_end: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True

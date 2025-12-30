@@ -12,3 +12,6 @@ class LoginResponseSchema(BaseModel):
     token_type: str
     expires_in: int
     user: UserLoginSchema
+
+class TokenSchema(BaseModel):
+    token: str
