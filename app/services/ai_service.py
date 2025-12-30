@@ -5,6 +5,7 @@ import json
 import logging
 import random
 from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, and_
 from sqlalchemy.orm import selectinload
@@ -192,7 +193,6 @@ class AIService:
 
     async def chat(self, db: AsyncSession, business_id: int, user_phone: str, user_message: str) -> Tuple[Any, str]:
         try:
-            from datetime import datetime
             biz, categories, products, faqs = await self._get_context_data(db, business_id)
             cart = await self._get_or_create_cart(db, business_id, user_phone)
             
