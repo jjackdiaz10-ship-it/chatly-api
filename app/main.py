@@ -23,6 +23,8 @@ from app.api.v1.widget import router as widget_router
 from app.api.v1.ecommerce import router as ecommerce_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.carts import router as carts_router
+from app.api.v1.knowledge_base import router as kb_router
+from app.api.v1.plans import router as plans_router
 from app.models import Role, Permission, User, Business, BusinessUser, BusinessChannel, Category, Product
 
 app = FastAPI(
@@ -54,6 +56,8 @@ v1_router.include_router(widget_router)
 v1_router.include_router(ecommerce_router)
 v1_router.include_router(payments_router)
 v1_router.include_router(carts_router)
+v1_router.include_router(kb_router)
+v1_router.include_router(plans_router)
 
 app.include_router(v1_router)
 
