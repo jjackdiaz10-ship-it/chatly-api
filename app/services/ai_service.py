@@ -20,6 +20,7 @@ from app.models.category import Category
 from app.models.knowledge_base import KnowledgeBase
 from app.models.subscription import Subscription
 from app.models.plan import Plan
+from app.models.learning_suggestion import LearningSuggestion
 
 # Configuración de Logging profesional
 logger = logging.getLogger(__name__)
@@ -189,6 +190,21 @@ class AIService:
             system_instruction=system_instruction
         )
 
+    async def _log_learning_suggestion(self, db: AsyncSession, business_id: int, question: str, answer: str):
+        """Guarda la respuesta de la IA como sugerencia para el administrador."""
+        try:
+            suggestion = LearningSuggestion(
+                business_id=business_id,
+                original_question=question,
+                ai_generated_answer=answer,
+                confidence_score=0.5
+            )
+            db.add(suggestion)
+            await db.commit()
+            logger.info(f"Sugerencia de aprendizaje guardada para negocio {business_id}")
+        except Exception as e:
+            logger.error(f"Error guardando sugerencia de aprendizaje: {e}")
+
     # --- 3. ORQUESTADOR ---
 
     async def chat(self, db: AsyncSession, business_id: int, user_phone: str, user_message: str) -> Tuple[Any, str]:
@@ -196,7 +212,16 @@ class AIService:
             biz, categories, products, faqs = await self._get_context_data(db, business_id)
             cart = await self._get_or_create_cart(db, business_id, user_phone)
             
-            # 1. ¿Es una duda frecuente (FAQ)?
+            # 1. Reglas Sagradas: Navegación de Catálogo y Carrito (Prioridad 1)
+            # Analizar intención con umbral estricto
+            intent = self._extract_intent(user_message)
+            matched = self._find_product(user_message, products)
+            
+            # Catálogo es sagrado (Si dice catálogo, NO llamar IA)
+            if intent == "catalog" or user_message.startswith("cat_") or user_message.startswith("prod_"):
+                return self._handle_catalog(products, categories, user_message)
+
+            # 2. FAQs Corporativas (Prioridad 2)
             faq_answer = self._check_faqs(user_message, faqs)
             if faq_answer:
                 return {
@@ -205,23 +230,14 @@ class AIService:
                     "action": {"buttons": [{"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}]}
                 }, "interactive"
 
-            intent = self._extract_intent(user_message)
-            matched = self._find_product(user_message, products)
-            
-            # 2. Manejo de recuperación (si el usuario vuelve tras abandono)
+            # 3. Operaciones de Carrito (Prioridad 3)
+            # Manejo de recuperación (si el usuario vuelve tras abandono)
             if cart.status == "abandoned":
-                cart.status = "recovered" # Marcar como recuperado al primer contacto
+                cart.status = "recovered"
                 await db.commit()
 
-            # ... (Lógica de cierre, adición y catálogo refinada) ...
-            if intent == "negative" and cart.items:
-                return await self._handle_checkout(db, cart, business_id, user_phone)
-
-            if matched and (intent == "add_to_cart" or intent == "search" or user_message.startswith("prod_")):
+            if matched and (intent == "add_to_cart" or intent == "search"):
                 return await self._handle_add_to_cart(db, cart, matched, user_message, products)
-
-            if intent == "catalog" or user_message.startswith("cat_"):
-                return self._handle_catalog(products, categories, user_message)
             
             elif intent == "view_cart" or (intent == "positive" and cart.items):
                 return self._handle_view_cart(cart)
@@ -235,7 +251,11 @@ class AIService:
             elif intent == "greeting":
                 return await self._handle_greeting(biz.name if biz else self.business_name)
 
-            return await self._handle_fallback(user_message, products, cart)
+            # 4. Fallback: Cerebro del Plan + Auto-Aprendizaje (Prioridad 4)
+            ai_resp, msg_type = await self._handle_fallback(user_message, products, cart)
+            # Registrar para aprendizaje
+            await self._log_learning_suggestion(db, business_id, user_message, ai_resp)
+            return ai_resp, msg_type
 
         except Exception as e:
             logger.error(f"Error en chat: {e}", exc_info=True)

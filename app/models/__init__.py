@@ -17,3 +17,4 @@ from app.models.widget_config import WidgetConfig
 from app.models.plan import Plan
 from app.models.subscription import Subscription
 from app.models.knowledge_base import KnowledgeBase
+from app.models.learning_suggestion import LearningSuggestion
