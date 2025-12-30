@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, and_
 from sqlalchemy.orm import selectinload
+from app.services.gemini_service import GeminiService
 
 # Modelos
 from app.models.product import Product
@@ -39,6 +40,9 @@ class AIService:
         
         # Umbrales de confianza para NLP
         self.CONFIDENCE_THRESHOLD = 0.65
+        
+        # Motor de IA Generativa
+        self.gemini = GeminiService()
         
         # Diccionario de intenciones precompilado
         self.INTENTS = {
@@ -157,6 +161,33 @@ class AIService:
             if score > 0.6 and score > best_score: best_score, best_match = score, p
         return best_match
 
+    async def _generate_ai_response(self, user_message: str, products: List[Product], cart: Cart) -> str:
+        """Utiliza el modelo de IA del plan para generar una respuesta inteligente."""
+        inventory_context = "\n".join([f"- {p.name}: ${p.price}" for p in products[:15]])
+        cart_context = ", ".join([f"{i.quantity}x {i.product.name}" for i in cart.items]) if cart.items else "vacío"
+        
+        system_instruction = f"""
+        Eres un Asesor de Ventas Experto de la tienda '{self.business_name}'.
+        Tu objetivo es cerrar la venta de forma amable y persuasiva.
+        Modelo de IA activo actualmente: {self.ai_model} (Modo: {self.plan_name}).
+        
+        CONTEXTO ACTUAL:
+        - Inventario sugerido: {inventory_context}
+        - Carrito del cliente: {cart_context}
+        
+        REGLAS:
+        1. Responde de forma concisa y amigable.
+        2. Si el cliente tiene dudas, usa el contexto para ayudarle.
+        3. Si no hay productos en el carrito, invita a ver el catálogo.
+        4. No menciones que eres una IA a menos que sea necesario.
+        """
+        
+        return await self.gemini.generate_response(
+            model=self.ai_model,
+            prompt=user_message,
+            system_instruction=system_instruction
+        )
+
     # --- 3. ORQUESTADOR ---
 
     async def chat(self, db: AsyncSession, business_id: int, user_phone: str, user_message: str) -> Tuple[Any, str]:
@@ -204,7 +235,7 @@ class AIService:
             elif intent == "greeting":
                 return await self._handle_greeting(biz.name if biz else self.business_name)
 
-            return self._handle_fallback(user_message, products, cart)
+            return await self._handle_fallback(user_message, products, cart)
 
         except Exception as e:
             logger.error(f"Error en chat: {e}", exc_info=True)
@@ -265,5 +296,7 @@ class AIService:
             "body": {"text": f"👋 ¡Hola! Bienvenido a *{biz_name}*.\n\nSoy tu asesor comercial 24/7.{model_badge}\n\n¿Cómo puedo ayudarte hoy?"},
             "action": {"buttons": [{"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}, {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}]}}, "interactive"
 
-    def _handle_fallback(self, message, products, cart):
-        return {"type": "button", "body": {"text": "🤔 No logré captar eso. ¿Te gustaría ver nuestro catálogo oficial o revisar tu pedido?"}, "action": {"buttons": [{"type": "reply", "reply": {"id": "catalog", "title": "Ver Catálogo 🛍️"}}, {"type": "reply", "reply": {"id": "view_cart", "title": "Mi Pedido 🛒"}}]}}, "interactive"
+    async def _handle_fallback(self, message, products, cart):
+        # En lugar de una respuesta estática, usamos el "Cerebro" del plan
+        ai_resp = await self._generate_ai_response(message, products, cart)
+        return ai_resp, "text"
