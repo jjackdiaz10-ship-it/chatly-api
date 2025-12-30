@@ -53,6 +53,7 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
     logging.info(f"Webhook received: {data}")
     
     try:
+        # 1. WHATSAPP ENGINE
         if "object" in data and data["object"] == "whatsapp_business_account":
             for entry in data["entry"]:
                 for change in entry["changes"]:
@@ -60,56 +61,53 @@ async def handle_webhook_by_id(channel_name: str, business_channel_id: int, requ
                     if "messages" in value:
                         for msg in value["messages"]:
                             from_num = msg["from"]
-                            text = msg.get("text", {}).get("body")
-                            # Handle interactive responses (button/list clicks)
-                            if "interactive" in msg:
-                                i_type = msg["interactive"]["type"]
-                                if i_type == "button_reply":
-                                    text = msg["interactive"]["button_reply"]["title"]
-                                elif i_type == "list_reply":
-                                    text = msg["interactive"]["list_reply"]["title"]
-                                    # Could also use ID if needed: msg["interactive"]["list_reply"]["id"]
-                                    
-                            print(f"DEBUG: Received message from {from_num}: {text}")
-                            if not text:
-                                continue
-                                
+                            text = _extract_text(msg)
+                            if not text: continue
+                                                
                             phone_id = value["metadata"]["phone_number_id"]
-                            
-                            # Find Bot assigned to this channel
-                            bot_res = await db.execute(
-                                select(Bot)
-                                .join(BotChannel)
-                                .where(BotChannel.business_channel_id == business_channel_id)
-                            )
-                            bot = bot_res.scalars().first()
+                            bot = await _get_bot_for_channel(db, business_channel_id)
                             
                             if bot and bot.is_active:
-                                response_content = None
-                                msg_type = "text"
-                                print(f"DEBUG: Found active bot: {bot.name}")
-                                
-                                # 1. Native Mastermind AI
-                                print("DEBUG: Using Mastermind Native Sales AI...")
-                                ai = AIService(bot)
-                                response_content, msg_type = await ai.chat(db, bot.business_id, from_num, text)
-                                print(f"DEBUG: AI Response ({msg_type}): {response_content}")
-                                
-                                # 2. Send
+                                response_content, msg_type = await AIService(bot).chat(db, bot.business_id, from_num, text)
                                 if response_content:
-                                    print(f"DEBUG: Attempting to send message to {from_num}")
-                                    try:
-                                        meta = MetaService(channel.token, phone_id)
-                                        send_res = await meta.send_whatsapp_message(from_num, response_content, msg_type)
-                                        print(f"DEBUG: Meta send response: {send_res}")
-                                    except Exception as e:
-                                        print(f"DEBUG: Exception during Meta send: {str(e)}")
-                                else:
-                                    print("DEBUG: No response content generated")
-                            else:
-                                logging.warning(f"No active bot found for channel {business_channel_id}")
-                                
+                                    meta = MetaService(channel.token, phone_id)
+                                    await meta.send_whatsapp_message(from_num, response_content, msg_type)
+
+        # 2. INSTAGRAM / MESSENGER ENGINE
+        elif "object" in data and data["object"] == "instagram":
+            for entry in data["entry"]:
+                for messaging in entry.get("messaging", []):
+                    sender_id = messaging["sender"]["id"]
+                    text = messaging.get("message", {}).get("text")
+                    if not text: continue
+                    
+                    bot = await _get_bot_for_channel(db, business_channel_id)
+                    if bot and bot.is_active:
+                        # AIService treats sender_id as the unique contact identifier (agnostic)
+                        response_content, msg_type = await AIService(bot).chat(db, bot.business_id, sender_id, text)
+                        if response_content:
+                            meta = MetaService(channel.token)
+                            await meta.send_instagram_message(sender_id, response_content, msg_type)
+
         return {"status": "ok"}
     except Exception as e:
         logging.error(f"Error processing webhook: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+async def _get_bot_for_channel(db, business_channel_id):
+    bot_res = await db.execute(
+        select(Bot)
+        .join(BotChannel)
+        .where(BotChannel.business_channel_id == business_channel_id)
+    )
+    return bot_res.scalars().first()
+
+def _extract_text(msg):
+    text = msg.get("text", {}).get("body")
+    if "interactive" in msg:
+        i_type = msg["interactive"]["type"]
+        if i_type == "button_reply":
+            text = msg["interactive"]["button_reply"]["title"]
+        elif i_type == "list_reply":
+            text = msg["interactive"]["list_reply"]["title"]
+    return text

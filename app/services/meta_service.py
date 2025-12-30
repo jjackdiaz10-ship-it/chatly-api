@@ -47,15 +47,32 @@ class MetaService:
                 print(f"DEBUG: Meta API Error: {str(e)}")
                 return {"error": str(e)}
 
-    async def send_instagram_message(self, recipient_id: str, text: str):
-        # Placeholder for Instagram messaging (similar to FB Messenger API)
+    async def send_instagram_message(self, recipient_id: str, content: Any, msg_type: str = "text"):
+        """
+        Sends a message to an Instagram user. 
+        Note: Instagram APIs are part of the Messenger Platform.
+        """
         url = f"{self.base_url}/me/messages"
-        params = {"access_token": self.access_token}
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Instagram has different interactive capabilities than WhatsApp.
+        # For now, we normalize the AI's 'interactive' response to text if it's IG.
+        message_text = content
+        if msg_type != "text" and isinstance(content, dict):
+            # Extract text from interactive body
+            message_text = content.get("body", {}).get("text", str(content))
+            
         payload = {
             "recipient": {"id": recipient_id},
-            "message": {"text": text}
+            "message": {"text": message_text}
         }
         
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, params=params, json=payload)
-            return response.json()
+            try:
+                response = await client.post(url, headers=headers, json=payload, timeout=10.0)
+                return response.json()
+            except Exception as e:
+                return {"error": str(e)}
