@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class GeminiService:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or GOOGLE_API_KEY
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        self.base_url = "https://generativelanguage.googleapis.com/v1/models"
 
     async def generate_response(self, model: str, prompt: str, system_instruction: str = None) -> str:
         """
@@ -20,12 +20,12 @@ class GeminiService:
             return "Lo siento, mi conexión con el cerebro de IA está desactivada temporalmente."
 
         # Map plan names to technical model names
-        # Use specific version identifiers to avoid 404s
+        # Use generic alias 'gemini-1.5-flash' which points to latest stable version
         model_mapping = {
-            "Gemini 2.5 Flash": "gemini-1.5-flash-001", 
-            "Gemini 2.0 Flash": "gemini-1.5-flash-001",
-            "Gemini 1.5 Flash": "gemini-1.5-flash-001",
-            "GPT-3.5-Turbo": "gemini-1.5-flash-001" # Fallback mapping
+            "Gemini 2.5 Flash": "gemini-1.5-flash", 
+            "Gemini 2.0 Flash": "gemini-1.5-flash",
+            "Gemini 1.5 Flash": "gemini-1.5-flash",
+            "GPT-3.5-Turbo": "gemini-1.5-flash" # Fallback mapping
         }
         
         technical_model = model_mapping.get(model, "gemini-1.5-flash")
