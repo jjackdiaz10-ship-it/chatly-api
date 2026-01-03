@@ -14,10 +14,10 @@ router = generate_crud(
     prefix="/ecommerce-configs",
     tag="Ecommerce Configs",
     permissions={
-        "create": "ecommerce:manage",
-        "read": "ecommerce:view",
-        "update": "ecommerce:manage",
-        "delete": "ecommerce:manage"
+        "create": "ecommerce:create",
+        "view": "ecommerce:view",
+        "update": "ecommerce:update",
+        "delete": "ecommerce:delete"
     }
 )
 

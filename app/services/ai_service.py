@@ -47,15 +47,17 @@ class AIService:
         self.gemini = GeminiService()
         
         # Diccionario de intenciones precompilado
+        # Diccionario de intenciones precompilado (Optimizado para evitar coalisiones)
         self.INTENTS = {
-            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "listo", "comprar", "checkout"],
-            "view_cart": ["carrito", "pedido", "mi bolsa", "que llevo", "cuanto voy", "ver compra", "revisar", "cart"],
-            "catalog": ["catalogo", "catálogo", "productos", "lista", "que vendes", "menu", "menú", "inventario", "ver todo", "tienda", "shop", "comprar"],
-            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "añadir", "necesito", "pon", "comprar"],
-            "greeting": ["hola", "buenas", "hey", "inicio", "empezar", "saludos", "hi"],
-            "clear_cart": ["vaciar", "borrar todo", "limpiar carrito", "cancelar compra", "resetear"],
-            "negative": ["no", "nada", "parar", "basta", "gracias", "no mas", "no más", "asi esta bien", "así está bien"],
-            "positive": ["si", "sí", "dale", "claro", "por supuesto", "perfecto", "bueno", "ok"]
+            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "listo", "checkout", "cuenta", "pagar ahora", "de una"],
+            "view_cart": ["carrito", "pedido", "mi bolsa", "que llevo", "cuanto voy", "ver compra", "revisar", "cart", "mi carro"],
+            "catalog": ["catalogo", "catálogo", "productos", "lista", "que vendes", "menu", "menú", "inventario", "ver todo", "tienda", "shop", "mostrame", "ver mas"],
+            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "añadir", "necesito", "pon", "comprar", "me interesa", "lo quiero", "una unidad"],
+            "greeting": ["hola", "buenas", "hey", "inicio", "empezar", "saludos", "hi", "buenos dias", "buenas tardes"],
+            "clear_cart": ["vaciar", "borrar todo", "limpiar carrito", "cancelar compra", "resetear", "vaciar carro"],
+            "info": ["precio", "costo", "cuanto cuesta", "info", "detalles", "informacion", "tallas", "colores"],
+            "negative": ["no", "nada", "parar", "basta", "gracias", "no mas", "no más", "asi esta bien", "así está bien", "cancelar"],
+            "positive": ["si", "sí", "dale", "claro", "por supuesto", "perfecto", "bueno", "ok", "confirmar", "asi es"]
         }
 
     # --- 1. CORE: GESTIÓN DE DATOS ---
@@ -164,31 +166,56 @@ class AIService:
         return best_match
 
     async def _generate_ai_response(self, user_message: str, products: List[Product], cart: Cart) -> str:
-        """Utiliza el modelo de IA del plan para generar una respuesta inteligente."""
-        inventory_context = "\n".join([f"- {p.name}: ${p.price}" for p in products[:15]])
-        cart_context = ", ".join([f"{i.quantity}x {i.product.name}" for i in cart.items]) if cart.items else "vacío"
+        """Utiliza el modelo de IA del plan para generar una respuesta inteligente y orientada al cierre."""
+        # 1. Preparar contexto de inventario optimizado (Priorizar stock > 0)
+        # Formato: [ID] Nombre - $Precio (Stock)
+        available_prods = [p for p in products if p.stock > 0]
+        # Si hay muchos productos, intentamos filtrar por relevancia simple o mostrar los top ventas
+        # (Aquí usamos los primeros 20 como base, idealmente sería búsqueda semántica)
+        inventory_context = "\n".join([f"- {p.name} (${p.price:,.0f})" for p in available_prods[:25]])
+        
+        cart_items_txt = ", ".join([f"{i.quantity}x {i.product.name}" for i in cart.items]) if cart.items else "Ninguno"
+        cart_total = sum(i.quantity * i.product.price for i in cart.items)
+        
+        # 2. Instrucción del Sistema: "EL VENDEDOR TIBURÓN AMABLE"
+        # Vambe philosophy: Always be closing (ABC).
         
         system_instruction = f"""
-        Eres un Asesor de Ventas Experto de la tienda '{self.business_name}'.
-        Tu objetivo es cerrar la venta de forma amable y persuasiva.
-        Modelo de IA activo actualmente: {self.ai_model} (Modo: {self.plan_name}).
+        ACTÚA COMO: El mejor vendedor estrella de la tienda '{self.business_name}'.
+        TU OBJETIVO: Cerrar la venta HOY. No mañana, AHORA.
         
-        CONTEXTO ACTUAL:
-        - Inventario sugerido: {inventory_context}
-        - Carrito del cliente: {cart_context}
+        DATOS CLAVE:
+        - Tu Inventario: {inventory_context}
+        - Carrito del Cliente: {cart_items_txt} (Total: ${cart_total:,.0f})
+        - Cliente: Interesado pero necesita empuje.
         
-        REGLAS:
-        1. Responde de forma concisa y amigable.
-        2. Si el cliente tiene dudas, usa el contexto para ayudarle.
-        3. Si no hay productos en el carrito, invita a ver el catálogo.
-        4. No menciones que eres una IA a menos que sea necesario.
+        REGLAS DE ORO (VAMBE MODE):
+        1.  **Vender es Ayudar**: Si el cliente duda, recomienda SOLUCIONES de tu inventario.
+        2.  **Cierre Asuntivo**: No preguntes si quiere comprar, asume que sí.
+            -   MAL: "¿Te gustaría ver los zapatos?"
+            -   BIEN: "Los zapatos rojos te irán perfecto. ¿Te aparto el par talla 40?"
+        3.  **Escasez y Urgencia**: "Me quedan pocas unidades", "El precio sube pronto".
+        4.  **Llama a la Acción (CTA)**: Siempre termina con una pregunta que invite a comprar o agregar al carrito.
+            -   "¿Te lo envuelvo?", "¿Prefieres el rojo o el negro?", "Escribe 'pagar' para que te lo mande ya."
+        5.  **Corto y Directo**: Mensajes de máximo 2-3 frases potentes. Emoji estratégico.
+        
+        IMPORTANTE:
+        - Si el cliente pregunta por algo que NO está en 'Tu Inventario', ofrece una alternativa similar diciendo "Ese se agotó, pero mira este..."
+        - Si el carrito tiene productos, insiste en cerrar la venta: "Veo que tienes excelentes gustos en tu carrito. ¿Cerramos el pedido?"
+        - NO inventes productos que no estén en la lista.
+        - NO menciones "Soy una IA". Eres una persona real (virtualmente) atendiendo.
+        
+        Responde al mensaje: "{user_message}"
         """
         
-        return await self.gemini.generate_response(
+        # 3. Llamada al LLM
+        response = await self.gemini.generate_response(
             model=self.ai_model,
             prompt=user_message,
             system_instruction=system_instruction
         )
+        
+        return response
 
     async def _log_learning_suggestion(self, db: AsyncSession, business_id: int, question: str, answer: str):
         """Guarda la respuesta de la IA como sugerencia para el administrador."""
