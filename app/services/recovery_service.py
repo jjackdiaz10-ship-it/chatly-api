@@ -45,13 +45,21 @@ class RecoveryService:
                 if not chan or not chan.token:
                     continue
                 
-                # 3. Preparar mensaje de recuperación persuasivo
-                total = sum(i.quantity * i.product.price for i in cart.items)
-                items_text = ", ".join([f"{i.quantity}x {i.product.name}" for i in cart.items[:2]])
+                # 3. Preparar mensaje de recuperación persuasivo con descuento dinámico
+                from app.services.discount_service import DiscountService
                 
-                message = f"🛒 *¡No lo dejes escapar!* \n\nHola, notamos que dejaste algo especial en tu carrito: *{items_text}*.\n\n"
-                message += f"Completa tu compra de *${total:,.0f}* ahora y asegura tu stock. 🛍️\n\n"
-                message += "💡 *Tip:* Usa el cupón *RECUPERA10* para un 10% de descuento extra solo por las próximas 2 horas."
+                # Get customer history for personalization
+                customer_history = await DiscountService.get_customer_history(db, cart.business_id, cart.user_phone)
+                
+                # Calculate personalized discount
+                discount_info = DiscountService.calculate_recovery_discount(
+                    cart=cart,
+                    urgency_hours=2,
+                    customer_history=customer_history
+                )
+                
+                # Generate persuasive message
+                message = DiscountService.generate_recovery_message(cart, discount_info)
                 
                 # 4. Enviar vía MetaService
                 meta = MetaService(chan.token, chan.provider_id)

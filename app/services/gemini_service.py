@@ -20,9 +20,10 @@ class GeminiService:
             return "Lo siento, mi conexión con el cerebro de IA está desactivada temporalmente."
 
         # Map plan names to technical model names
+        # Map to 1.5-flash as default because 2.0-exp has very low free tier quotas (429 errors)
         model_mapping = {
-            "Gemini 2.5 Flash": "gemini-2.0-flash-exp", # Using latest experimental/available
-            "Gemini 2.0 Flash": "gemini-2.0-flash-exp",
+            "Gemini 2.5 Flash": "gemini-1.5-flash", 
+            "Gemini 2.0 Flash": "gemini-1.5-flash",
             "Gemini 1.5 Flash": "gemini-1.5-flash"
         }
         
@@ -38,9 +39,13 @@ class GeminiService:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(url, json=payload, timeout=15.0)
+                if response.status_code == 429:
+                    logger.warning("Gemini API Rate Limit hit (429)")
+                    return "Estoy recibiendo demasiadas consultas ahora mismo. Dame un respiro de 10 segundos y volvemos a hablar. 😅"
+                
                 response.raise_for_status()
                 data = response.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
             except Exception as e:
-                logger.error(f"Error calling Gemini API: {e}")
-                return "Parece que estoy teniendo un momento de reflexión profunda. ¿Puedes repetirme eso?"
+                logger.error(f"Error calling Gemini API ({technical_model}): {e}")
+                return "Parece que mi 'cerebro' de IA está un poco saturado. ¿Podrías intentar lo mismo con otras palabras?"

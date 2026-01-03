@@ -48,14 +48,14 @@ class AIService:
         
         # Diccionario de intenciones precompilado
         self.INTENTS = {
-            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "listo", "comprar"],
+            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "listo", "comprar", "checkout"],
             "view_cart": ["carrito", "pedido", "mi bolsa", "que llevo", "cuanto voy", "ver compra", "revisar", "cart"],
-            "catalog": ["catalogo", "productos", "lista", "que vendes", "menu", "inventario", "ver todo", "tienda", "shop"],
-            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "necesito", "pon", "comprar"],
-            "greeting": ["hola", "buenas", "hey", "inicio", "empezar", "saludos"],
+            "catalog": ["catalogo", "catálogo", "productos", "lista", "que vendes", "menu", "menú", "inventario", "ver todo", "tienda", "shop", "comprar"],
+            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "añadir", "necesito", "pon", "comprar"],
+            "greeting": ["hola", "buenas", "hey", "inicio", "empezar", "saludos", "hi"],
             "clear_cart": ["vaciar", "borrar todo", "limpiar carrito", "cancelar compra", "resetear"],
-            "negative": ["no", "nada", "parar", "basta", "gracias", "no mas", "asi esta bien"],
-            "positive": ["si", "dale", "claro", "por supuesto", "perfecto", "bueno", "ok"]
+            "negative": ["no", "nada", "parar", "basta", "gracias", "no mas", "no más", "asi esta bien", "así está bien"],
+            "positive": ["si", "sí", "dale", "claro", "por supuesto", "perfecto", "bueno", "ok"]
         }
 
     # --- 1. CORE: GESTIÓN DE DATOS ---
@@ -192,6 +192,10 @@ class AIService:
 
     async def _log_learning_suggestion(self, db: AsyncSession, business_id: int, question: str, answer: str):
         """Guarda la respuesta de la IA como sugerencia para el administrador."""
+        # Evitar loguear errores técnicos o mensajes de error
+        if "problema técnico" in answer or "momento de reflexión" in answer:
+            return
+            
         try:
             suggestion = LearningSuggestion(
                 business_id=business_id,
@@ -283,12 +287,20 @@ class AIService:
 
     async def _handle_checkout(self, db, cart, business_id, user_phone):
         if not cart.items: return "🛒 Tu carrito está vacío. ¡Mira nuestro catálogo! 🛍️", "text"
-        total = sum(i.quantity * i.product.price for i in cart.items)
-        # Link de pago con parámetro de tracking
+        
+        # Import discount service for consistent messaging
+        from app.services.discount_service import DiscountService
+        
+        # Generate payment link with recovery tracking
         payment_link = f"https://pay.chatly.io/{business_id}/{cart.id}?utm=recovery" if cart.status == "recovered" else f"https://pay.chatly.io/{business_id}/{cart.id}"
-        cart.is_active = False # Soft close
+        
+        # Generate checkout message with discount details
+        message = DiscountService.generate_checkout_message(cart, payment_link)
+        
+        cart.is_active = False  # Soft close
         await db.commit()
-        return f"🌟 *Excelente selección.* He generado tu orden de compra segura.\n\n💰 *Total a pagar: ${total:,.0f}*\n\n🔗 Paga aquí para finalizar: {payment_link}\n\n¡Gracias por preferir {self.business_name}! 🚀", "text"
+        
+        return message, "text"
 
     def _handle_catalog(self, products, categories, message):
         if message.startswith("cat_"):

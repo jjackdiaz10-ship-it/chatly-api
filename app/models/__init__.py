@@ -18,3 +18,4 @@ from app.models.plan import Plan
 from app.models.subscription import Subscription
 from app.models.knowledge_base import KnowledgeBase
 from app.models.learning_suggestion import LearningSuggestion
+from app.models.analytics import CartRecoveryEvent, AIPerformanceMetric, CustomerLifetimeValue, EventType
