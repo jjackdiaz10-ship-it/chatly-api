@@ -12,6 +12,8 @@ class Cart(Base):
     user_phone = Column(String, nullable=False) # Key to correlate with WhatsApp user
     is_active = Column(Boolean, default=True)
     status = Column(String, default="active") # active, abandoned, recovered, paid
+    source = Column(String, default="chat_native") # chat_native, woocommerce, shopify
+    external_id = Column(String, nullable=True, index=True) # ID in external system
     coupon_applied = Column(String, nullable=True)
     metadata_json = Column(String, default="{}")
     last_interaction = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -20,11 +20,12 @@ class GeminiService:
             return "Lo siento, mi conexión con el cerebro de IA está desactivada temporalmente."
 
         # Map plan names to technical model names
-        # Map to 1.5-flash as default because 2.0-exp has very low free tier quotas (429 errors)
+        # Use specific version identifiers to avoid 404s
         model_mapping = {
-            "Gemini 2.5 Flash": "gemini-1.5-flash", 
-            "Gemini 2.0 Flash": "gemini-1.5-flash",
-            "Gemini 1.5 Flash": "gemini-1.5-flash"
+            "Gemini 2.5 Flash": "gemini-1.5-flash-001", 
+            "Gemini 2.0 Flash": "gemini-1.5-flash-001",
+            "Gemini 1.5 Flash": "gemini-1.5-flash-001",
+            "GPT-3.5-Turbo": "gemini-1.5-flash-001" # Fallback mapping
         }
         
         technical_model = model_mapping.get(model, "gemini-1.5-flash")

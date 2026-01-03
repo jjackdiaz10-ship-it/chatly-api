@@ -64,6 +64,15 @@ v1_router.include_router(plans_router)
 v1_router.include_router(admin_router)
 v1_router.include_router(learning_router)
 v1_router.include_router(analytics_router)
+from app.api.v1.integrations.woocommerce import router as woo_router
+from app.api.v1.integrations.shopify import router as shopify_router
+from app.api.v1.integrations.magento import router as magento_router
+from app.api.v1.integrations.prestashop import router as presta_router
+
+v1_router.include_router(woo_router)
+v1_router.include_router(shopify_router)
+v1_router.include_router(magento_router)
+v1_router.include_router(presta_router)
 
 app.include_router(v1_router)
 
