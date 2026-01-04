@@ -20,6 +20,7 @@ class UserUpdate(BaseModel):
 
 class UserRead(UserBase):
     id: int
+    business_id: Optional[int] = None # Field expected by frontend
 
     class Config:
         from_attributes = True

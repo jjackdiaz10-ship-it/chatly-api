@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 class GeminiService:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or GOOGLE_API_KEY
-        # Volvemos a 'v1' que es la versión estable y usamos el campo correcto systemInstruction
-        self.base_url = "https://generativelanguage.googleapis.com/v1/models"
+        # Revert to v1beta because 'system_instruction' is NOT supported in v1 for gemini-2.0-flash yet (returns 400)
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
 
     async def generate_response(self, model: str, prompt: str, system_instruction: str = None) -> str:
         """
@@ -19,7 +19,8 @@ class GeminiService:
         if not self.api_key:
             logger.error("Gemini API Key is missing")
             return "Lo siento, mi conexión con el cerebro de IA está desactivada temporalmente."
-
+        
+        # ... (model mapping logic stays same) ...
         # Map plan names to technical model names
         # Updated based on available models (1.5 Flash not available, moving to 2.0)
         model_mapping = {
@@ -36,9 +37,9 @@ class GeminiService:
             "contents": [{"parts": [{"text": prompt}]}]
         }
         
-        # IMPORTANTE: En la API REST v1 se usa camelCase (systemInstruction)
+        # v1beta uses snake_case for system_instruction
         if system_instruction:
-            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
 
         async with httpx.AsyncClient() as client:
             try:

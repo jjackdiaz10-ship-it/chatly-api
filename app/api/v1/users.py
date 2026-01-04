@@ -58,6 +58,31 @@ async def create_user(
     return user
 
 
+@router.get("/me", response_model=UserRead)
+async def read_user_me(
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get current user profile with active business context.
+    """
+    # Force load memberships to ensure we get the business_id
+    # (Although deps.py might validly load it, we ensure here)
+    if not current_user.memberships:
+        # Re-fetch or assuming deps.py loaded it with selectinload
+        pass
+
+    # Logic to pick primary business (for now, simply the first one)
+    if current_user.memberships and len(current_user.memberships) > 0:
+        # Pydantic will not auto-fill this dynamic field from the ORM model unless it's a property
+        # So we create a dictionary or modify the object if it's a Pydantic model
+        # But current_user is an ORM object.
+        # Safest way: Attach the attribute manually to the ORM instance (it's dirty but works for Pydantic from_attributes)
+        current_user.business_id = current_user.memberships[0].business_id
+    
+    return current_user
+
+
 @router.get(
     "/",
     response_model=list[UserRead],
