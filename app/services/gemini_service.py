@@ -21,15 +21,15 @@ class GeminiService:
             return "Lo siento, mi conexión con el cerebro de IA está desactivada temporalmente."
 
         # Map plan names to technical model names
-        # Use generic alias 'gemini-1.5-flash' which points to latest stable version
+        # Updated based on available models (1.5 Flash not available, moving to 2.0)
         model_mapping = {
-            "Gemini 2.5 Flash": "gemini-1.5-flash", 
-            "Gemini 2.0 Flash": "gemini-1.5-flash",
-            "Gemini 1.5 Flash": "gemini-1.5-flash",
-            "GPT-3.5-Turbo": "gemini-1.5-flash" # Fallback mapping
+            "Gemini 2.5 Flash": "gemini-2.5-flash", 
+            "Gemini 2.0 Flash": "gemini-2.0-flash",
+            "Gemini 1.5 Flash": "gemini-2.0-flash", # Fallback to 2.0
+            "GPT-3.5-Turbo": "gemini-2.0-flash" # Fallback mapping
         }
         
-        technical_model = model_mapping.get(model, "gemini-1.5-flash")
+        technical_model = model_mapping.get(model, "gemini-2.0-flash")
         url = f"{self.base_url}/{technical_model}:generateContent?key={self.api_key}"
         
         payload = {

@@ -10,19 +10,26 @@ if not api_key:
     print("GOOGLE_API_KEY not found in env.")
     exit(1)
 
-url = f"https://generativelanguage.googleapis.com/v1/models?key={api_key}"
+endpoints = [
+    "https://generativelanguage.googleapis.com/v1/models",
+    "https://generativelanguage.googleapis.com/v1beta/models"
+]
 
-print(f"Querying: {url}")
+for base_url in endpoints:
+    url = f"{base_url}?key={api_key}"
+    print(f"\nQuerying: {base_url}")
 
-try:
-    response = requests.get(url)
-    if response.status_code == 200:
-        models = response.json().get('models', [])
-        print(f"Found {len(models)} models:")
-        for m in models:
-            if "generateContent" in m.get("supportedGenerationMethods", []):
-                print(f" - {m['name']} (Display: {m.get('displayName')})")
-    else:
-        print(f"Error {response.status_code}: {response.text}")
-except Exception as e:
-    print(f"Exception: {e}")
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            models = response.json().get('models', [])
+            print(f"Found {len(models)} models:")
+            for m in models:
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    # Filter for flash models to be concise
+                    if "flash" in m['name']:
+                        print(f" - {m['name']} (Display: {m.get('displayName')})")
+        else:
+            print(f"Error {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"Exception: {e}")
