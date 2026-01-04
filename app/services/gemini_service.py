@@ -8,9 +8,8 @@ logger = logging.getLogger(__name__)
 class GeminiService:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or GOOGLE_API_KEY
-        # Revert to v1beta because 'system_instruction' is not yet fully supported in v1 stable for all models/regions
-        # And to fix 400 error likely caused by unknown field in v1
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        # Volvemos a 'v1' que es la versión estable y usamos el campo correcto systemInstruction
+        self.base_url = "https://generativelanguage.googleapis.com/v1/models"
 
     async def generate_response(self, model: str, prompt: str, system_instruction: str = None) -> str:
         """
@@ -37,9 +36,9 @@ class GeminiService:
             "contents": [{"parts": [{"text": prompt}]}]
         }
         
-        # System instruction is a v1beta feature primarily
+        # IMPORTANTE: En la API REST v1 se usa camelCase (systemInstruction)
         if system_instruction:
-            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
+            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
         async with httpx.AsyncClient() as client:
             try:
@@ -51,9 +50,7 @@ class GeminiService:
                 
                 if response.status_code != 200:
                     logger.error(f"Gemini API Error {response.status_code}: {response.text}")
-                    # Log payload for debugging (be careful with sensitive info logs in prod)
-                    # logger.debug(f"Payload sent: {payload}")
-                    response.raise_for_status()
+                    return f"Error de IA: {response.status_code}"
                 
                 data = response.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
