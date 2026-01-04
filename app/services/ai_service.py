@@ -46,16 +46,15 @@ class AIService:
         # Motor de IA Generativa
         self.gemini = GeminiService()
         
-        # Diccionario de intenciones precompilado
         # Diccionario de intenciones precompilado (Optimizado para evitar coalisiones)
         self.INTENTS = {
-            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "listo", "checkout", "cuenta", "pagar ahora", "de una"],
-            "view_cart": ["carrito", "pedido", "mi bolsa", "que llevo", "cuanto voy", "ver compra", "revisar", "cart", "mi carro"],
-            "catalog": ["catalogo", "catálogo", "productos", "lista", "que vendes", "menu", "menú", "inventario", "ver todo", "tienda", "shop", "mostrame", "ver mas"],
-            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "añadir", "necesito", "pon", "comprar", "me interesa", "lo quiero", "una unidad"],
+            "checkout": ["pagar", "finalizar", "cerrar cuenta", "cobrame", "link de pago", "total", "terminar", "listo", "checkout", "cuenta", "pagar ahora", "de una", "cerrar pedido"],
+            "view_cart": ["carrito", "pedido", "mi bolsa", "que llevo", "cuanto voy", "ver compra", "revisar", "cart", "mi carro", "ver mi carrito", "mostrar carrito"],
+            "catalog": ["catalogo", "catálogo", "productos", "lista", "que vendes", "menu", "menú", "inventario", "ver todo", "tienda", "shop", "mostrame", "ver mas", "que tenes"],
+            "add_to_cart": ["quiero", "dame", "agrega", "suma", "llevo", "anadir", "añadir", "necesito", "pon", "comprar", "me interesa", "lo quiero", "una unidad", "agregar", "sumar", "me lo llevo", "meter al carrito"],
             "greeting": ["hola", "buenas", "hey", "inicio", "empezar", "saludos", "hi", "buenos dias", "buenas tardes"],
             "clear_cart": ["vaciar", "borrar todo", "limpiar carrito", "cancelar compra", "resetear", "vaciar carro"],
-            "info": ["precio", "costo", "cuanto cuesta", "info", "detalles", "informacion", "tallas", "colores"],
+            "info": ["precio", "costo", "cuanto cuesta", "info", "detalles", "informacion", "tallas", "colores", "que es"],
             "negative": ["no", "nada", "parar", "basta", "gracias", "no mas", "no más", "asi esta bien", "así está bien", "cancelar"],
             "positive": ["si", "sí", "dale", "claro", "por supuesto", "perfecto", "bueno", "ok", "confirmar", "asi es"]
         }
@@ -73,10 +72,10 @@ class AIService:
         
         if sub and sub.plan:
             self.plan_name = sub.plan.name
-            self.ai_model = sub.plan.features.get("ai_model", "Gemini 2.5 Flash")
+            self.ai_model = sub.plan.features.get("ai_model", "gemini-2.0-flash")
         else:
             self.plan_name = "Iris Lite"
-            self.ai_model = "Gemini 1.5 Flash" # Base model
+            self.ai_model = "gemini-2.0-flash" # Default fallback
 
     async def _get_context_data(self, db: AsyncSession, business_id: int):
         await self._fetch_plan_config(db, business_id)
@@ -115,13 +114,16 @@ class AIService:
         for intent, keywords in self.INTENTS.items():
             for word in words:
                 if word in keywords:
-                    scores[intent] += 1.2
-                elif len(word) > 3:
-                    matches = difflib.get_close_matches(word, keywords, n=1, cutoff=0.85)
-                    if matches: scores[intent] += 0.8
+                    scores[intent] += 1.5 # Mayor peso a coincidencias exactas
+                else:
+                    # Fuzzy match solo para palabras largas
+                    if len(word) > 4:
+                        matches = difflib.get_close_matches(word, keywords, n=1, cutoff=0.85)
+                        if matches: scores[intent] += 0.9
 
         best_intent = max(scores, key=scores.get)
-        if scores[best_intent] < 0.6: return "search"
+        # Umbral relajado para detectar 'comprar' mejor
+        if scores[best_intent] < 1.0: return "search" 
         return best_intent
 
     def _check_faqs(self, message: str, faqs: List[KnowledgeBase]) -> Optional[str]:
@@ -134,15 +136,16 @@ class AIService:
             # Score basado en intersección de palabras en la pregunta
             q_words = set(re.findall(r'\w+', faq.question.lower()))
             msg_words = set(re.findall(r'\w+', msg))
-            score = len(q_words & msg_words) / len(q_words) if q_words else 0
+            if not q_words: continue
             
-            if score > 0.7 and score > best_score:
+            score = len(q_words & msg_words) / len(q_words)
+            
+            if score > 0.6 and score > best_score:
                 best_score = score
                 best_faq = faq
         
         return best_faq.answer if best_faq else None
 
-    # ... (find_product y extract_quantity se mantienen similares) ...
     def _extract_quantity(self, message: str) -> int:
         match = re.search(r'(\d+)\s*(?:de|unidades|uds|u|cajas|items)?', message.lower())
         if match: return min(int(match.group(1)), 99)
@@ -155,55 +158,73 @@ class AIService:
                 pid = int(re.search(r'prod_(\d+)', msg).group(1))
                 return next((p for p in products if p.id == pid), None)
             except: pass
-        for p in sorted(products, key=lambda x: len(x.name), reverse=True):
+            
+        # 1. Búsqueda exacta en nombre
+        for p in products:
             if p.name.lower() in msg: return p
+            
+        # 2. Búsqueda por tokens (palabras clave)
         msg_tokens = set(re.findall(r'\w+', msg))
         best_match, best_score = None, 0
+        
         for p in products:
             p_tokens = set(re.findall(r'\w+', p.name.lower()))
-            score = len(msg_tokens & p_tokens) / len(p_tokens) if p_tokens else 0
-            if score > 0.6 and score > best_score: best_score, best_match = score, p
+            if not p_tokens: continue
+            
+            # Intersección ponderada
+            intersection = msg_tokens & p_tokens
+            if not intersection: continue
+            
+            score = len(intersection) / len(p_tokens)
+            if score > 0.4 and score > best_score: # Umbral más bajo para ser más flexible
+                best_score, best_match = score, p
+                
         return best_match
 
     async def _generate_ai_response(self, user_message: str, products: List[Product], cart: Cart) -> str:
         """Utiliza el modelo de IA del plan para generar una respuesta inteligente y orientada al cierre."""
-        # 1. Preparar contexto de inventario optimizado (Priorizar stock > 0)
-        # Formato: [ID] Nombre - $Precio (Stock)
-        available_prods = [p for p in products if p.stock > 0]
-        # Si hay muchos productos, intentamos filtrar por relevancia simple o mostrar los top ventas
-        # (Aquí usamos los primeros 20 como base, idealmente sería búsqueda semántica)
-        inventory_context = "\n".join([f"- {p.name} (${p.price:,.0f})" for p in available_prods[:25]])
         
-        cart_items_txt = ", ".join([f"{i.quantity}x {i.product.name}" for i in cart.items]) if cart.items else "Ninguno"
+        # 1. Contexto de Inventario Inteligente (Saber qué ya tiene)
+        cart_product_ids = [i.product_id for i in cart.items]
+        
+        inventory_lines = []
+        for p in products:
+            if p.stock > 0:
+                mark = "✅ [EN TU CARRITO]" if p.id in cart_product_ids else ""
+                inventory_lines.append(f"- {p.name} (${p.price:,.0f}) {mark}")
+        
+        # Limitamos contexto
+        inventory_context = "\n".join(inventory_lines[:30])
+        
+        cart_items_txt = ", ".join([f"{i.quantity}x {i.product.name}" for i in cart.items]) if cart.items else "VACÍO"
         cart_total = sum(i.quantity * i.product.price for i in cart.items)
         
-        # 2. Instrucción del Sistema: "EL VENDEDOR TIBURÓN AMABLE"
-        # Vambe philosophy: Always be closing (ABC).
+        # 2. Instrucción del Sistema: "EL VENDEDOR TIBURÓN AMABLE (VERSIÓN CONCISA)"
         
         system_instruction = f"""
-        ACTÚA COMO: El mejor vendedor estrella de la tienda '{self.business_name}'.
-        TU OBJETIVO: Cerrar la venta HOY. No mañana, AHORA.
+        ERES: El mejor vendedor de '{self.business_name}'. Tu meta es CERRAR VENTAS, no charlar.
         
-        DATOS CLAVE:
-        - Tu Inventario: {inventory_context}
-        - Carrito del Cliente: {cart_items_txt} (Total: ${cart_total:,.0f})
-        - Cliente: Interesado pero necesita empuje.
+        --- INFORMACIÓN REAL ---
+        TUS PRODUCTOS:
+        {inventory_context}
         
-        REGLAS DE ORO (VAMBE MODE):
-        1.  **Vender es Ayudar**: Si el cliente duda, recomienda SOLUCIONES de tu inventario.
-        2.  **Cierre Asuntivo**: No preguntes si quiere comprar, asume que sí.
-            -   MAL: "¿Te gustaría ver los zapatos?"
-            -   BIEN: "Los zapatos rojos te irán perfecto. ¿Te aparto el par talla 40?"
-        3.  **Escasez y Urgencia**: "Me quedan pocas unidades", "El precio sube pronto".
-        4.  **Llama a la Acción (CTA)**: Siempre termina con una pregunta que invite a comprar o agregar al carrito.
-            -   "¿Te lo envuelvo?", "¿Prefieres el rojo o el negro?", "Escribe 'pagar' para que te lo mande ya."
-        5.  **Corto y Directo**: Mensajes de máximo 2-3 frases potentes. Emoji estratégico.
+        CARRITO CLIENTE (REAL): {cart_items_txt} (Total: ${cart_total:,.0f})
+        ------------------------
         
-        IMPORTANTE:
-        - Si el cliente pregunta por algo que NO está en 'Tu Inventario', ofrece una alternativa similar diciendo "Ese se agotó, pero mira este..."
-        - Si el carrito tiene productos, insiste en cerrar la venta: "Veo que tienes excelentes gustos en tu carrito. ¿Cerramos el pedido?"
-        - NO inventes productos que no estén en la lista.
-        - NO menciones "Soy una IA". Eres una persona real (virtualmente) atendiendo.
+        REGLAS CRÍTICAS (NO LA CAGUES):
+        1. **NO ALUCINES ACCIONES**: Tú NO puedes agregar productos al carrito ni cobrar. Solo el código puede.
+           - Si el cliente quiere comprar, dile: "Escribe 'quiero X' para agregarlo." o "Dale al botón de pagar."
+           - JAMÁS digas "listo, agregado" si no ves que el carrito cambió. Miente y di "¿Confirmamos agregarlo?"
+        
+        2. **SI EL CARRITO ESTÁ VACÍO**:
+           - No digas "veo que tienes X". Di "Tu carrito está vacío."
+        
+        3. **SE CONCISO (MAX 40 PALABRAS)**:
+           - Respuestas cortas, directas y amables. Parecido a WhatsApp.
+           - Usa emojis.
+        
+        4. **CIERRE ASUNTIVO**:
+           - Si pide info, dásela + pregunta de cierre: "¿Te lo separo?"
         
         Responde al mensaje: "{user_message}"
         """
